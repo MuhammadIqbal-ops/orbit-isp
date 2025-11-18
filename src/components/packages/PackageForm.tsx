@@ -65,6 +65,8 @@ export function PackageForm({ packageData, onSuccess, onCancel }: PackageFormPro
         type: values.type,
       };
 
+      let packageId: string;
+
       if (packageData?.id) {
         const { error } = await supabase
           .from("packages")
@@ -72,14 +74,35 @@ export function PackageForm({ packageData, onSuccess, onCancel }: PackageFormPro
           .eq("id", packageData.id);
 
         if (error) throw error;
+        packageId = packageData.id;
         toast.success("Package updated successfully");
       } else {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("packages")
-          .insert([packagePayload]);
+          .insert([packagePayload])
+          .select()
+          .single();
 
         if (error) throw error;
+        packageId = data.id;
         toast.success("Package created successfully");
+      }
+
+      // Sync to Mikrotik
+      try {
+        const { error: syncError } = await supabase.functions.invoke("mikrotik-sync-package", {
+          body: { packageId },
+        });
+
+        if (syncError) {
+          console.error("Mikrotik sync error:", syncError);
+          toast.warning("Package saved but Mikrotik sync failed");
+        } else {
+          toast.success("Package synced to Mikrotik");
+        }
+      } catch (syncError) {
+        console.error("Mikrotik sync error:", syncError);
+        toast.warning("Package saved but Mikrotik sync failed");
       }
 
       onSuccess();

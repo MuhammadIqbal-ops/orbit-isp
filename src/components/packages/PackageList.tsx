@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Edit, Trash2 } from "lucide-react";
+import { Edit, Trash2, RefreshCw } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import {
@@ -43,6 +43,7 @@ export function PackageList({ onEdit, refreshTrigger }: PackageListProps) {
   const [packages, setPackages] = useState<Package[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
 
   const fetchPackages = async () => {
     try {
@@ -81,6 +82,23 @@ export function PackageList({ onEdit, refreshTrigger }: PackageListProps) {
       toast.error(error.message || "Failed to delete package");
     } finally {
       setDeleteId(null);
+    }
+  };
+
+  const handleSync = async (packageId: string) => {
+    setSyncingId(packageId);
+    try {
+      const { error } = await supabase.functions.invoke("mikrotik-sync-package", {
+        body: { packageId },
+      });
+
+      if (error) throw error;
+
+      toast.success("Package synced to Mikrotik successfully");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to sync package to Mikrotik");
+    } finally {
+      setSyncingId(null);
     }
   };
 
@@ -126,6 +144,15 @@ export function PackageList({ onEdit, refreshTrigger }: PackageListProps) {
                 <TableCell>Rp {pkg.price.toLocaleString("id-ID")}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-2">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => handleSync(pkg.id)}
+                      disabled={syncingId === pkg.id}
+                      title="Sync to Mikrotik"
+                    >
+                      <RefreshCw className={`h-4 w-4 ${syncingId === pkg.id ? "animate-spin" : ""}`} />
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"
