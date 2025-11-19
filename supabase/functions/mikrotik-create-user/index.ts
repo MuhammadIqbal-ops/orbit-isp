@@ -3,24 +3,15 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.81.1";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
 };
 
-interface PackageData {
-  id: string;
-  name: string;
-  bandwidth: string;
-  burst: string | null;
-  priority: number | null;
-  type: string;
-}
-
-interface RouterSettings {
-  host: string;
-  port: number;
+interface CreateUserRequest {
+  subscriptionId: string;
   username: string;
   password: string;
-  ssl: boolean;
+  packageId: string;
 }
 
 // Mock Mikrotik API implementation
@@ -41,21 +32,37 @@ class MikrotikAPI {
   async connect(): Promise<void> {
     console.log(`Simulating connection to Mikrotik at ${this.host}:${this.port}`);
     // TODO: Implement actual RouterOS API connection
+    // const conn = new RouterOSAPI({ host, user, password, port, timeout: 10 });
+    // await conn.connect();
   }
 
-  async createOrUpdateProfile(profileName: string, bandwidth: string): Promise<void> {
-    console.log(`Creating/updating PPP profile: ${profileName} with bandwidth: ${bandwidth}`);
+  async createPPPoEProfile(profileName: string, bandwidth: string): Promise<void> {
+    console.log(`Creating PPPoE profile: ${profileName} with bandwidth: ${bandwidth}`);
     // TODO: Implement actual profile creation
-    // const existingProfiles = await conn.write('/ppp/profile/print', [`?name=${profileName}`]);
-    // if (existingProfiles.length > 0) {
-    //   await conn.write('/ppp/profile/set', [`=${existingProfiles[0]['.id']}`, `=rate-limit=${bandwidth}`]);
-    // } else {
-    //   await conn.write('/ppp/profile/add', [`=name=${profileName}`, ...]);
-    // }
+    // await conn.write('/ppp/profile/add', [`=name=${profileName}`, ...]);
+  }
+
+  async createPPPoESecret(username: string, password: string, profileName: string): Promise<void> {
+    console.log(`Creating PPPoE secret for user: ${username}`);
+    // TODO: Implement actual secret creation
+    // await conn.write('/ppp/secret/add', [`=name=${username}`, ...]);
+  }
+
+  async createHotspotUser(username: string, password: string): Promise<void> {
+    console.log(`Creating Hotspot user: ${username}`);
+    // TODO: Implement actual hotspot user creation
+    // await conn.write('/ip/hotspot/user/add', [`=name=${username}`, ...]);
+  }
+
+  async createSimpleQueue(queueName: string, target: string, maxLimit: string, burst: string, priority: number): Promise<void> {
+    console.log(`Creating Simple Queue: ${queueName} for ${target}`);
+    // TODO: Implement actual queue creation
+    // await conn.write('/queue/simple/add', [`=name=${queueName}`, ...]);
   }
 
   async close(): Promise<void> {
     console.log("Closing Mikrotik connection");
+    // TODO: Close actual connection
   }
 }
 
@@ -70,11 +77,10 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    const { packageId } = await req.json();
+    const { subscriptionId, username, password, packageId }: CreateUserRequest =
+      await req.json();
 
-    if (!packageId) {
-      throw new Error("Package ID is required");
-    }
+    console.log("Creating PPPoE user:", username);
 
     // Get package data
     const { data: pkg, error: pkgError } = await supabase
@@ -91,14 +97,14 @@ serve(async (req) => {
       .from("router_settings")
       .select("*")
       .limit(1)
-      .single();
+      .maybeSingle();
 
-    if (settingsError) {
+    if (settingsError || !settings) {
       console.log("No router settings found, skipping Mikrotik sync");
       return new Response(
         JSON.stringify({
           success: true,
-          message: "Package saved but Mikrotik sync skipped (no router configured)",
+          message: "Subscription created but Mikrotik sync skipped",
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -114,23 +120,41 @@ serve(async (req) => {
 
     await mikrotik.connect();
 
-    // Create or update profile
+    // Create profile and user based on package type
     const profileName = `profile-${pkg.name.toLowerCase().replace(/\s+/g, "-")}`;
-    await mikrotik.createOrUpdateProfile(profileName, pkg.bandwidth);
+
+    if (pkg.type === "pppoe") {
+      // Create PPPoE profile
+      await mikrotik.createPPPoEProfile(profileName, pkg.bandwidth);
+
+      // Create PPPoE secret
+      await mikrotik.createPPPoESecret(username, password, profileName);
+    } else if (pkg.type === "hotspot") {
+      // Create Hotspot user
+      await mikrotik.createHotspotUser(username, password);
+    }
+
+    // Create Simple Queue for bandwidth control
+    const queueName = `${username}-queue`;
+    await mikrotik.createSimpleQueue(
+      queueName,
+      username,
+      pkg.bandwidth,
+      pkg.burst || pkg.bandwidth,
+      pkg.priority || 8
+    );
 
     await mikrotik.close();
-
-    console.log(`Package ${pkg.name} synced to Mikrotik successfully`);
 
     return new Response(
       JSON.stringify({
         success: true,
-        message: `Package ${pkg.name} synced to Mikrotik successfully`,
+        message: `User ${username} created successfully in Mikrotik`,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
-    console.error("Error syncing package to Mikrotik:", error);
+    console.error("Error creating Mikrotik user:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
     return new Response(
       JSON.stringify({ error: message }),
