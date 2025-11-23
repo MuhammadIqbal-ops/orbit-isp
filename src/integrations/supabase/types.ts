@@ -156,6 +156,39 @@ export type Database = {
           },
         ]
       }
+      radius_settings: {
+        Row: {
+          created_at: string
+          enabled: boolean
+          host: string
+          id: string
+          nas_identifier: string
+          port: number
+          secret: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          enabled?: boolean
+          host: string
+          id?: string
+          nas_identifier?: string
+          port?: number
+          secret: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          enabled?: boolean
+          host?: string
+          id?: string
+          nas_identifier?: string
+          port?: number
+          secret?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       router_settings: {
         Row: {
           created_at: string

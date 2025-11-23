@@ -39,20 +39,17 @@ export default function Packages() {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-3xl font-bold tracking-tight text-foreground">Packages</h2>
-            <p className="text-muted-foreground">Configure your service packages</p>
+            <h2 className="text-3xl font-bold tracking-tight text-foreground">Service Packages</h2>
+            <p className="text-muted-foreground">Create and manage bandwidth packages for your customers</p>
           </div>
           <Button onClick={() => setIsDialogOpen(true)} className="shadow-soft">
             <Plus className="mr-2 h-4 w-4" />
-            Add Package
+            Create Package
           </Button>
         </div>
 
-        <Card className="shadow-soft">
-          <CardHeader>
-            <CardTitle>Package List</CardTitle>
-          </CardHeader>
-          <CardContent>
+        <Card className="shadow-soft border-muted/50">
+          <CardContent className="p-0">
             <PackageList onEdit={handleEdit} refreshTrigger={refreshTrigger} />
           </CardContent>
         </Card>

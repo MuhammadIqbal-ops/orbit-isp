@@ -103,36 +103,42 @@ export function PackageList({ onEdit, refreshTrigger }: PackageListProps) {
   };
 
   if (loading) {
-    return <div className="text-center py-8 text-muted-foreground">Loading packages...</div>;
+    return (
+      <div className="rounded-md border border-muted p-8">
+        <div className="text-center text-muted-foreground">Loading packages...</div>
+      </div>
+    );
   }
 
   if (packages.length === 0) {
     return (
-      <div className="text-center py-8 text-muted-foreground">
-        No packages found. Create your first package to get started.
+      <div className="rounded-md border border-muted p-12">
+        <div className="text-center space-y-3">
+          <p className="text-muted-foreground">No packages found</p>
+          <p className="text-sm text-muted-foreground">Create your first package to get started</p>
+        </div>
       </div>
     );
   }
 
   return (
     <>
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead>Bandwidth</TableHead>
-              <TableHead>Burst</TableHead>
-              <TableHead>Priority</TableHead>
-              <TableHead>Price</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {packages.map((pkg) => (
-              <TableRow key={pkg.id}>
-                <TableCell className="font-medium">{pkg.name}</TableCell>
+      <Table>
+        <TableHeader>
+          <TableRow className="hover:bg-transparent border-muted/50">
+            <TableHead className="font-semibold">Name</TableHead>
+            <TableHead className="font-semibold">Type</TableHead>
+            <TableHead className="font-semibold">Bandwidth</TableHead>
+            <TableHead className="font-semibold">Burst</TableHead>
+            <TableHead className="font-semibold">Priority</TableHead>
+            <TableHead className="font-semibold">Price</TableHead>
+            <TableHead className="text-right font-semibold">Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {packages.map((pkg) => (
+            <TableRow key={pkg.id} className="border-muted/50">
+              <TableCell className="font-medium">{pkg.name}</TableCell>
                 <TableCell>
                   <Badge variant={pkg.type === "pppoe" ? "default" : "secondary"}>
                     {pkg.type.toUpperCase()}
@@ -150,6 +156,7 @@ export function PackageList({ onEdit, refreshTrigger }: PackageListProps) {
                       onClick={() => handleSync(pkg.id)}
                       disabled={syncingId === pkg.id}
                       title="Sync to Mikrotik"
+                      className="hover:bg-primary/10 hover:text-primary"
                     >
                       <RefreshCw className={`h-4 w-4 ${syncingId === pkg.id ? "animate-spin" : ""}`} />
                     </Button>
@@ -157,6 +164,7 @@ export function PackageList({ onEdit, refreshTrigger }: PackageListProps) {
                       variant="ghost"
                       size="icon"
                       onClick={() => onEdit(pkg)}
+                      className="hover:bg-primary/10 hover:text-primary"
                     >
                       <Edit className="h-4 w-4" />
                     </Button>
@@ -164,6 +172,7 @@ export function PackageList({ onEdit, refreshTrigger }: PackageListProps) {
                       variant="ghost"
                       size="icon"
                       onClick={() => setDeleteId(pkg.id)}
+                      className="hover:bg-destructive/10 hover:text-destructive"
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -173,7 +182,6 @@ export function PackageList({ onEdit, refreshTrigger }: PackageListProps) {
             ))}
           </TableBody>
         </Table>
-      </div>
 
       <AlertDialog open={!!deleteId} onOpenChange={() => setDeleteId(null)}>
         <AlertDialogContent>

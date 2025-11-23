@@ -64,23 +64,27 @@ export default function Auth() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-background to-secondary/20 p-4">
-      <Card className="w-full max-w-md shadow-elegant">
-        <CardHeader className="text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-gradient-primary">
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-background via-secondary/10 to-background p-4">
+      <Card className="w-full max-w-md shadow-elegant border-muted/50">
+        <CardHeader className="text-center space-y-4">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-primary shadow-elegant">
             <Wifi className="h-8 w-8 text-white" />
           </div>
-          <CardTitle className="text-2xl">ISP Billing System</CardTitle>
-          <CardDescription>Manage your ISP operations efficiently</CardDescription>
+          <div>
+            <CardTitle className="text-3xl font-bold">ISP Billing System</CardTitle>
+            <CardDescription className="text-base mt-2">
+              Manage your ISP operations efficiently
+            </CardDescription>
+          </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           <Tabs defaultValue="signin" className="w-full">
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="signin">Sign In</TabsTrigger>
               <TabsTrigger value="signup">Sign Up</TabsTrigger>
             </TabsList>
             
-            <TabsContent value="signin">
+            <TabsContent value="signin" className="space-y-4">
               <form onSubmit={handleSignIn} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="email-signin">Email</Label>
@@ -110,7 +114,11 @@ export default function Auth() {
               </form>
             </TabsContent>
             
-            <TabsContent value="signup">
+            <TabsContent value="signup" className="space-y-4">
+              <div className="rounded-lg bg-primary/10 p-3 text-sm text-primary border border-primary/20">
+                <p className="font-medium">First user becomes admin</p>
+                <p className="text-xs mt-1 opacity-90">The first account created will automatically receive admin privileges</p>
+              </div>
               <form onSubmit={handleSignUp} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="email-signup">Email</Label>
