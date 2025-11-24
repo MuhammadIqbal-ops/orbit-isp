@@ -1,1 +1,22 @@
 project_id = "iqljsknhuutromjjfnei"
+
+[functions.mikrotik-create-user]
+verify_jwt = true
+
+[functions.mikrotik-online-users]
+verify_jwt = true
+
+[functions.mikrotik-sync-package]
+verify_jwt = true
+
+[functions.mikrotik-system]
+verify_jwt = true
+
+[functions.mikrotik-toggle-user]
+verify_jwt = true
+
+[functions.mikrotik-traffic]
+verify_jwt = true
+
+[functions.process-subscriptions]
+verify_jwt = false
