@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -11,41 +12,96 @@ serve(async (req) => {
   }
 
   try {
-    // Mock data for demonstration - replace with actual Mikrotik API integration
-    const onlineUsers = [
-      {
-        id: "1",
-        username: "user001",
-        type: "pppoe",
-        address: "10.10.10.1",
-        uptime: "2h 15m",
-        downloadSpeed: "8.5 Mbps",
-        uploadSpeed: "5.2 Mbps",
-      },
-      {
-        id: "2",
-        username: "user002",
-        type: "hotspot",
-        address: "10.10.20.15",
-        uptime: "45m",
-        downloadSpeed: "3.2 Mbps",
-        uploadSpeed: "1.8 Mbps",
-      },
-      {
-        id: "3",
-        username: "user003",
-        type: "pppoe",
-        address: "10.10.10.5",
-        uptime: "5h 30m",
-        downloadSpeed: "15.8 Mbps",
-        uploadSpeed: "8.9 Mbps",
-      },
-    ];
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+
+    // Get router settings
+    const { data: settings, error: settingsError } = await supabase
+      .from("router_settings")
+      .select("*")
+      .limit(1)
+      .maybeSingle();
+
+    if (settingsError || !settings) {
+      throw new Error("Router settings not configured");
+    }
+
+    console.log(`Fetching online users from MikroTik at ${settings.host}`);
+
+    const protocol = settings.ssl ? 'https' : 'http';
+    const auth = btoa(`${settings.username}:${settings.password}`);
+    const headers = {
+      'Authorization': `Basic ${auth}`,
+      'Content-Type': 'application/json'
+    };
+
+    // Fetch PPPoE active connections
+    const pppoeUrl = `${protocol}://${settings.host}/rest/ppp/active`;
+    const pppoeResponse = await fetch(pppoeUrl, { method: 'GET', headers });
+    
+    let pppoeUsers = [];
+    if (pppoeResponse.ok) {
+      pppoeUsers = await pppoeResponse.json();
+      console.log(`Found ${pppoeUsers.length} active PPPoE users`);
+    } else {
+      console.error(`Failed to fetch PPPoE users: ${pppoeResponse.status}`);
+    }
+
+    // Fetch Hotspot active connections
+    const hotspotUrl = `${protocol}://${settings.host}/rest/ip/hotspot/active`;
+    const hotspotResponse = await fetch(hotspotUrl, { method: 'GET', headers });
+    
+    let hotspotUsers = [];
+    if (hotspotResponse.ok) {
+      hotspotUsers = await hotspotResponse.json();
+      console.log(`Found ${hotspotUsers.length} active Hotspot users`);
+    } else {
+      console.error(`Failed to fetch Hotspot users: ${hotspotResponse.status}`);
+    }
+
+    // Helper to format uptime
+    const formatUptime = (uptime: string) => {
+      if (!uptime) return "0m";
+      // Uptime format from MikroTik: "1d2h3m4s" or "2h3m4s"
+      return uptime.replace(/(\d+)w/g, '$1w ')
+                   .replace(/(\d+)d/g, '$1d ')
+                   .replace(/(\d+)h/g, '$1h ')
+                   .replace(/(\d+)m/g, '$1m')
+                   .replace(/(\d+)s/g, '')
+                   .trim();
+    };
+
+    // Format PPPoE users
+    const formattedPPPoE = pppoeUsers.map((user: any) => ({
+      id: user['.id'],
+      username: user.name || "unknown",
+      type: "pppoe",
+      address: user.address || "N/A",
+      uptime: formatUptime(user.uptime),
+      downloadSpeed: "N/A", // Real-time speed requires additional API call
+      uploadSpeed: "N/A",
+    }));
+
+    // Format Hotspot users
+    const formattedHotspot = hotspotUsers.map((user: any) => ({
+      id: user['.id'],
+      username: user.user || "unknown",
+      type: "hotspot",
+      address: user.address || "N/A",
+      uptime: formatUptime(user.uptime),
+      downloadSpeed: "N/A",
+      uploadSpeed: "N/A",
+    }));
+
+    const onlineUsers = [...formattedPPPoE, ...formattedHotspot];
 
     return new Response(JSON.stringify(onlineUsers), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
+    console.error("Error fetching online users:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
     return new Response(JSON.stringify({ error: message }), {
       status: 500,
