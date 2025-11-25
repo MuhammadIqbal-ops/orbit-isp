@@ -34,6 +34,7 @@ const menuItems = [
   { title: "Customers", url: "/customers", icon: Users, showBadge: true, badgeKey: "customers" },
   { title: "Packages", url: "/packages", icon: Package, showBadge: true, badgeKey: "packages" },
   { title: "Subscriptions", url: "/subscriptions", icon: Wifi, showBadge: true, badgeKey: "online-detail" },
+  { title: "Secrets", url: "/secrets", icon: LogOut, showBadge: false },
   { title: "Invoices", url: "/invoices", icon: FileText },
   { title: "Payments", url: "/payments", icon: CreditCard },
   { title: "Monitoring", url: "/monitoring", icon: Activity, showBadge: true, badgeKey: "online-total" },

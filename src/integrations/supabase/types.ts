@@ -139,6 +139,59 @@ export type Database = {
           },
         ]
       }
+      mikrotik_secrets: {
+        Row: {
+          comment: string | null
+          created_at: string
+          customer_id: string | null
+          disabled: boolean
+          id: string
+          local_address: string | null
+          password: string
+          profile: string | null
+          remote_address: string | null
+          service: string
+          updated_at: string
+          username: string
+        }
+        Insert: {
+          comment?: string | null
+          created_at?: string
+          customer_id?: string | null
+          disabled?: boolean
+          id?: string
+          local_address?: string | null
+          password: string
+          profile?: string | null
+          remote_address?: string | null
+          service: string
+          updated_at?: string
+          username: string
+        }
+        Update: {
+          comment?: string | null
+          created_at?: string
+          customer_id?: string | null
+          disabled?: boolean
+          id?: string
+          local_address?: string | null
+          password?: string
+          profile?: string | null
+          remote_address?: string | null
+          service?: string
+          updated_at?: string
+          username?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mikrotik_secrets_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       packages: {
         Row: {
           bandwidth: string
