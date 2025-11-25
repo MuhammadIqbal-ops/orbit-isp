@@ -118,6 +118,8 @@ export function SecretForm({ secretId, onSuccess }: SecretFormProps) {
 
   const onSubmit = async (values: z.infer<typeof formSchema>) => {
     setLoading(true);
+    let newSecretId = secretId;
+    
     try {
       if (secretId) {
         const { error } = await supabase
@@ -140,14 +142,37 @@ export function SecretForm({ secretId, onSuccess }: SecretFormProps) {
           comment: values.comment || null,
         };
         
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("mikrotik_secrets")
-          .insert([insertData]);
+          .insert([insertData])
+          .select()
+          .single();
 
         if (error) throw error;
+        newSecretId = data.id;
         toast.success("Secret created successfully!");
         form.reset();
       }
+
+      // Sync to MikroTik
+      const syncAction = secretId ? 'update' : 'create';
+      const { data: syncData, error: syncError } = await supabase.functions.invoke(
+        'mikrotik-sync-secret',
+        {
+          body: { 
+            action: syncAction, 
+            secretId: newSecretId 
+          }
+        }
+      );
+
+      if (syncError || !syncData?.success) {
+        console.error('MikroTik sync error:', syncError || syncData?.error);
+        toast.warning(`Secret saved but failed to sync to MikroTik: ${syncError?.message || syncData?.error || 'Unknown error'}`);
+      } else {
+        toast.success(`Secret synced to MikroTik via ${syncData.method}`);
+      }
+
       onSuccess?.();
     } catch (error: any) {
       toast.error(error.message || "Failed to save secret");

@@ -64,6 +64,23 @@ export function SecretList({ onEdit, refreshTrigger }: SecretListProps) {
     if (!deleteId) return;
 
     try {
+      // Sync to MikroTik first (delete from router)
+      const { data: syncData, error: syncError } = await supabase.functions.invoke(
+        'mikrotik-sync-secret',
+        {
+          body: { 
+            action: 'delete', 
+            secretId: deleteId 
+          }
+        }
+      );
+
+      if (syncError || !syncData?.success) {
+        console.error('MikroTik sync error:', syncError || syncData?.error);
+        toast.warning(`Failed to delete from MikroTik: ${syncError?.message || syncData?.error || 'Unknown error'}`);
+      }
+
+      // Delete from database
       const { error } = await supabase
         .from("mikrotik_secrets")
         .delete()
