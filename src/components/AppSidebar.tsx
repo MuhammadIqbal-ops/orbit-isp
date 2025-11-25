@@ -1,5 +1,7 @@
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
 import {
   LayoutDashboard,
   Users,
@@ -11,6 +13,7 @@ import {
   Wifi,
   LogOut,
 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import {
   Sidebar,
   SidebarContent,
@@ -28,12 +31,12 @@ import { useAuth } from "@/hooks/useAuth";
 
 const menuItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
-  { title: "Customers", url: "/customers", icon: Users },
-  { title: "Packages", url: "/packages", icon: Package },
-  { title: "Subscriptions", url: "/subscriptions", icon: Wifi },
+  { title: "Customers", url: "/customers", icon: Users, showBadge: true, badgeKey: "customers" },
+  { title: "Packages", url: "/packages", icon: Package, showBadge: true, badgeKey: "packages" },
+  { title: "Subscriptions", url: "/subscriptions", icon: Wifi, showBadge: true, badgeKey: "subscriptions" },
   { title: "Invoices", url: "/invoices", icon: FileText },
   { title: "Payments", url: "/payments", icon: CreditCard },
-  { title: "Monitoring", url: "/monitoring", icon: Activity },
+  { title: "Monitoring", url: "/monitoring", icon: Activity, showBadge: true, badgeKey: "online" },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
 
@@ -45,6 +48,55 @@ export function AppSidebar() {
   const collapsed = state === "collapsed";
 
   const isActive = (path: string) => currentPath === path;
+
+  // Fetch real-time statistics
+  const { data: customersCount } = useQuery({
+    queryKey: ["customers-count"],
+    queryFn: async () => {
+      const { count } = await supabase.from("customers").select("*", { count: "exact", head: true });
+      return count || 0;
+    },
+  });
+
+  const { data: packagesCount } = useQuery({
+    queryKey: ["packages-count"],
+    queryFn: async () => {
+      const { count } = await supabase.from("packages").select("*", { count: "exact", head: true });
+      return count || 0;
+    },
+  });
+
+  const { data: activeSubscriptions } = useQuery({
+    queryKey: ["active-subscriptions-count"],
+    queryFn: async () => {
+      const { count } = await supabase.from("subscriptions").select("*", { count: "exact", head: true }).eq("status", "active");
+      return count || 0;
+    },
+  });
+
+  const { data: onlineUsers } = useQuery({
+    queryKey: ["mikrotik-online-count"],
+    queryFn: async () => {
+      const { data } = await supabase.functions.invoke("mikrotik-online-users");
+      return data?.length || 0;
+    },
+    refetchInterval: 10000,
+  });
+
+  const getBadgeValue = (key: string) => {
+    switch (key) {
+      case "customers":
+        return customersCount;
+      case "packages":
+        return packagesCount;
+      case "subscriptions":
+        return activeSubscriptions;
+      case "online":
+        return onlineUsers;
+      default:
+        return null;
+    }
+  };
 
   return (
     <Sidebar className={collapsed ? "w-14" : "w-60"}>
@@ -60,21 +112,36 @@ export function AppSidebar() {
           <SidebarGroupLabel>Main Menu</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {menuItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild>
-                    <NavLink
-                      to={item.url}
-                      end
-                      className="flex items-center gap-2 hover:bg-sidebar-accent rounded-md transition-smooth"
-                      activeClassName="bg-sidebar-accent text-primary font-medium"
-                    >
-                      <item.icon className="h-4 w-4" />
-                      {!collapsed && <span>{item.title}</span>}
-                    </NavLink>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+              {menuItems.map((item) => {
+                const badgeValue = item.showBadge && item.badgeKey ? getBadgeValue(item.badgeKey) : null;
+                return (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton asChild>
+                      <NavLink
+                        to={item.url}
+                        end
+                        className="flex items-center gap-2 hover:bg-sidebar-accent rounded-md transition-smooth"
+                        activeClassName="bg-sidebar-accent text-primary font-medium"
+                      >
+                        <item.icon className="h-4 w-4" />
+                        {!collapsed && (
+                          <div className="flex items-center justify-between w-full">
+                            <span>{item.title}</span>
+                            {badgeValue !== null && badgeValue !== undefined && (
+                              <Badge 
+                                variant="secondary" 
+                                className="ml-auto text-xs px-2 py-0.5"
+                              >
+                                {badgeValue}
+                              </Badge>
+                            )}
+                          </div>
+                        )}
+                      </NavLink>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
