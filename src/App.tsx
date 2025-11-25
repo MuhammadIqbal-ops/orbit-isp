@@ -10,6 +10,7 @@ import Dashboard from "./pages/Dashboard";
 import Customers from "./pages/Customers";
 import Packages from "./pages/Packages";
 import Subscriptions from "./pages/Subscriptions";
+import Secrets from "./pages/Secrets";
 import Invoices from "./pages/Invoices";
 import Payments from "./pages/Payments";
 import Monitoring from "./pages/Monitoring";
@@ -57,6 +58,14 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <Subscriptions />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/secrets"
+              element={
+                <ProtectedRoute>
+                  <Secrets />
                 </ProtectedRoute>
               }
             />
