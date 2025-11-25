@@ -69,19 +69,26 @@ export function AppSidebar() {
   const { data: onlineUsers } = useQuery({
     queryKey: ["mikrotik-online-sidebar"],
     queryFn: async () => {
-      const { data, error } = await supabase.functions.invoke("mikrotik-online-users");
-      if (error) return { total: 0, pppoe: 0, hotspot: 0 };
-      
-      const pppoeCount = data?.filter((u: any) => u.type === "pppoe")?.length || 0;
-      const hotspotCount = data?.filter((u: any) => u.type === "hotspot")?.length || 0;
-      
-      return {
-        total: data?.length || 0,
-        pppoe: pppoeCount,
-        hotspot: hotspotCount,
-      };
+      try {
+        const { data, error } = await supabase.functions.invoke("mikrotik-online-users");
+        if (error) throw error;
+        
+        const pppoeCount = data?.filter((u: any) => u.type === "pppoe")?.length || 0;
+        const hotspotCount = data?.filter((u: any) => u.type === "hotspot")?.length || 0;
+        
+        return {
+          total: data?.length || 0,
+          pppoe: pppoeCount,
+          hotspot: hotspotCount,
+        };
+      } catch (error) {
+        console.error("MikroTik connection error:", error);
+        return { total: 0, pppoe: 0, hotspot: 0 };
+      }
     },
     refetchInterval: 10000,
+    retry: 2,
+    retryDelay: 1000,
   });
 
   const getBadgeValue = (key: string) => {

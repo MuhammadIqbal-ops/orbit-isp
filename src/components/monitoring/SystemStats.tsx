@@ -24,9 +24,10 @@ export function SystemStats() {
       
       if (error) throw error;
       setSystemData(data);
+      setLoading(false);
     } catch (error: any) {
-      toast.error("Failed to fetch system data");
-    } finally {
+      console.error("MikroTik system data error:", error);
+      setSystemData(null);
       setLoading(false);
     }
   };
@@ -42,7 +43,15 @@ export function SystemStats() {
   }
 
   if (!systemData) {
-    return <div className="text-muted-foreground">No system data available</div>;
+    return (
+      <Card className="p-6">
+        <div className="flex flex-col items-center justify-center text-center">
+          <Cpu className="h-12 w-12 text-muted-foreground/50 mb-3" />
+          <p className="text-muted-foreground">Cannot connect to MikroTik router</p>
+          <p className="text-xs text-muted-foreground mt-1">Please check router settings and connection</p>
+        </div>
+      </Card>
+    );
   }
 
   return (
