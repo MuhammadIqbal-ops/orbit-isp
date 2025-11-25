@@ -3,6 +3,9 @@ project_id = "iqljsknhuutromjjfnei"
 [functions.mikrotik-create-user]
 verify_jwt = true
 
+[functions.mikrotik-disconnect-user]
+verify_jwt = true
+
 [functions.mikrotik-online-users]
 verify_jwt = true
 
