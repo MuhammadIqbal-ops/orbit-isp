@@ -14,55 +14,84 @@ interface CreateUserRequest {
   packageId: string;
 }
 
-// Mock Mikrotik API implementation
-// TODO: Replace with actual node-routeros library when deploying to Node.js environment
-class MikrotikAPI {
+// Low-level MikroTik API client (TCP) used as fallback when REST is not available
+class MikrotikAPIClient {
+  private conn: Deno.Conn | null = null;
   private host: string;
+  private port: number;
   private username: string;
   private password: string;
-  private port: number;
 
-  constructor(host: string, username: string, password: string, port: number) {
+  constructor(host: string, port: number, username: string, password: string) {
     this.host = host;
+    this.port = port;
     this.username = username;
     this.password = password;
-    this.port = port;
   }
 
   async connect(): Promise<void> {
-    console.log(`Simulating connection to Mikrotik at ${this.host}:${this.port}`);
-    // TODO: Implement actual RouterOS API connection
-    // const conn = new RouterOSAPI({ host, user, password, port, timeout: 10 });
-    // await conn.connect();
+    try {
+      this.conn = await Deno.connect({ hostname: this.host, port: this.port });
+      await this.login();
+    } catch (error: any) {
+      throw new Error(`Failed to connect to MikroTik API: ${error.message}`);
+    }
   }
 
-  async createPPPoEProfile(profileName: string, bandwidth: string): Promise<void> {
-    console.log(`Creating PPPoE profile: ${profileName} with bandwidth: ${bandwidth}`);
-    // TODO: Implement actual profile creation
-    // await conn.write('/ppp/profile/add', [`=name=${profileName}`, ...]);
+  private async login(): Promise<void> {
+    const loginCmd = `/login\n=name=${this.username}\n=password=${this.password}\n`;
+    await this.sendCommand(loginCmd);
   }
 
-  async createPPPoESecret(username: string, password: string, profileName: string): Promise<void> {
-    console.log(`Creating PPPoE secret for user: ${username}`);
-    // TODO: Implement actual secret creation
-    // await conn.write('/ppp/secret/add', [`=name=${username}`, ...]);
+  private async sendCommand(cmd: string): Promise<string> {
+    if (!this.conn) throw new Error("Not connected");
+
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+
+    await this.conn.write(encoder.encode(cmd + "\n"));
+
+    const buffer = new Uint8Array(4096);
+    const n = await this.conn.read(buffer);
+    return decoder.decode(buffer.subarray(0, n || 0));
   }
 
-  async createHotspotUser(username: string, password: string): Promise<void> {
-    console.log(`Creating Hotspot user: ${username}`);
-    // TODO: Implement actual hotspot user creation
-    // await conn.write('/ip/hotspot/user/add', [`=name=${username}`, ...]);
+  async command(cmd: string, params: Record<string, string> = {}): Promise<Record<string, any>[]> {
+    let cmdString = cmd;
+    for (const [key, value] of Object.entries(params)) {
+      cmdString += `\n=${key}=${value}`;
+    }
+
+    const response = await this.sendCommand(cmdString);
+    return this.parseResponse(response);
   }
 
-  async createSimpleQueue(queueName: string, target: string, maxLimit: string, burst: string, priority: number): Promise<void> {
-    console.log(`Creating Simple Queue: ${queueName} for ${target}`);
-    // TODO: Implement actual queue creation
-    // await conn.write('/queue/simple/add', [`=name=${queueName}`, ...]);
+  private parseResponse(response: string): Record<string, any>[] {
+    const results: Record<string, any>[] = [];
+    const lines = response.split("\n");
+    let currentItem: Record<string, any> = {};
+
+    for (const line of lines) {
+      if (line.startsWith("=")) {
+        const [key, value] = line.substring(1).split("=", 2);
+        currentItem[key] = value;
+      } else if (line === "!done" && Object.keys(currentItem).length > 0) {
+        results.push(currentItem);
+        currentItem = {};
+      }
+    }
+
+    return results;
   }
 
   async close(): Promise<void> {
-    console.log("Closing Mikrotik connection");
-    // TODO: Close actual connection
+    if (this.conn) {
+      try {
+        this.conn.close();
+      } catch (error) {
+        console.error("Error closing connection:", error);
+      }
+    }
   }
 }
 
@@ -80,7 +109,7 @@ serve(async (req) => {
     const { subscriptionId, username, password, packageId }: CreateUserRequest =
       await req.json();
 
-    console.log("Creating PPPoE user:", username);
+    console.log("Creating MikroTik user for subscription:", subscriptionId, username);
 
     // Get package data
     const { data: pkg, error: pkgError } = await supabase
@@ -100,59 +129,164 @@ serve(async (req) => {
       .maybeSingle();
 
     if (settingsError || !settings) {
-      console.log("No router settings found, skipping Mikrotik sync");
+      console.log("No router settings found, skipping MikroTik sync");
       return new Response(
         JSON.stringify({
           success: true,
-          message: "Subscription created but Mikrotik sync skipped",
+          message: "Subscription created but MikroTik sync skipped",
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Connect to Mikrotik
-    const mikrotik = new MikrotikAPI(
-      settings.host,
-      settings.username,
-      settings.password,
-      settings.port
-    );
+    const restUrl = `http${settings.ssl ? "s" : ""}://${settings.host}:80/rest`;
+    const auth = btoa(`${settings.username}:${settings.password}`);
 
-    await mikrotik.connect();
+    // Helper to parse bandwidth / queue params from package
+    const maxLimit = pkg.bandwidth as string; // e.g. "10M/2M"
+    const burstLimit = (pkg.burst as string) || maxLimit;
+    const priority = (pkg.priority ?? 8).toString();
 
-    // Create profile and user based on package type
-    const profileName = `profile-${pkg.name.toLowerCase().replace(/\s+/g, "-")}`;
+    // ---------- Try REST API first ----------
+    try {
+      if (pkg.type === "pppoe") {
+        // Create PPPoE secret
+        const pppoeData: Record<string, string> = {
+          name: username,
+          password,
+          service: "pppoe",
+          profile: "default",
+          comment: `sub:${subscriptionId}`,
+          disabled: "no",
+        };
 
-    if (pkg.type === "pppoe") {
-      // Create PPPoE profile
-      await mikrotik.createPPPoEProfile(profileName, pkg.bandwidth);
+        const secretResp = await fetch(`${restUrl}/ppp/secret/add`, {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${auth}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(pppoeData),
+        });
 
-      // Create PPPoE secret
-      await mikrotik.createPPPoESecret(username, password, profileName);
-    } else if (pkg.type === "hotspot") {
-      // Create Hotspot user
-      await mikrotik.createHotspotUser(username, password);
+        if (!secretResp.ok) {
+          throw new Error(`REST PPPoE secret error: ${secretResp.statusText}`);
+        }
+        console.log("PPPoE secret created via REST API");
+      } else if (pkg.type === "hotspot") {
+        const hotspotData: Record<string, string> = {
+          name: username,
+          password,
+          profile: "default",
+          comment: `sub:${subscriptionId}`,
+          disabled: "no",
+        };
+
+        const hotspotResp = await fetch(`${restUrl}/ip/hotspot/user/add`, {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${auth}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(hotspotData),
+        });
+
+        if (!hotspotResp.ok) {
+          throw new Error(`REST Hotspot user error: ${hotspotResp.statusText}`);
+        }
+        console.log("Hotspot user created via REST API");
+      }
+
+      // Simple Queue for bandwidth control (applies to both types)
+      const queueName = `${username}-queue`;
+      const queueData: Record<string, string> = {
+        name: queueName,
+        target: username,
+        "max-limit": maxLimit,
+        "burst-limit": burstLimit,
+        priority,
+      };
+
+      const queueResp = await fetch(`${restUrl}/queue/simple/add`, {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${auth}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(queueData),
+      });
+
+      if (!queueResp.ok) {
+        throw new Error(`REST queue error: ${queueResp.statusText}`);
+      }
+
+      console.log("Simple queue created via REST API");
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          message: `User ${username} created in MikroTik via REST API`,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    } catch (restError: any) {
+      console.log("REST API failed, falling back to API protocol:", restError.message);
     }
 
-    // Create Simple Queue for bandwidth control
-    const queueName = `${username}-queue`;
-    await mikrotik.createSimpleQueue(
-      queueName,
-      username,
-      pkg.bandwidth,
-      pkg.burst || pkg.bandwidth,
-      pkg.priority || 8
+    // ---------- Fallback: MikroTik API protocol over TCP ----------
+    const apiClient = new MikrotikAPIClient(
+      settings.host,
+      settings.port,
+      settings.username,
+      settings.password
     );
 
-    await mikrotik.close();
+    try {
+      await apiClient.connect();
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        message: `User ${username} created successfully in Mikrotik`,
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+      if (pkg.type === "pppoe") {
+        await apiClient.command("/ppp/secret/add", {
+          name: username,
+          password,
+          service: "pppoe",
+          profile: "default",
+          comment: `sub:${subscriptionId}`,
+          disabled: "no",
+        });
+        console.log("PPPoE secret created via API protocol");
+      } else if (pkg.type === "hotspot") {
+        await apiClient.command("/ip/hotspot/user/add", {
+          name: username,
+          password,
+          profile: "default",
+          comment: `sub:${subscriptionId}`,
+          disabled: "no",
+        });
+        console.log("Hotspot user created via API protocol");
+      }
+
+      await apiClient.command("/queue/simple/add", {
+        name: `${username}-queue`,
+        target: username,
+        "max-limit": maxLimit,
+        "burst-limit": burstLimit,
+        priority,
+      });
+      console.log("Simple queue created via API protocol");
+
+      await apiClient.close();
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          message: `User ${username} created in MikroTik via API protocol`,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    } catch (apiError: any) {
+      await apiClient.close();
+      throw new Error(`API protocol failed: ${apiError.message}`);
+    }
   } catch (error) {
     console.error("Error creating Mikrotik user:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
