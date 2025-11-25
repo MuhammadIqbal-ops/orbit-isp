@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Users, FileText, DollarSign, Activity, TrendingUp, AlertCircle, Clock } from "lucide-react";
+import { Users, FileText, DollarSign, Activity, TrendingUp, AlertCircle, Clock, Wifi, Cpu, HardDrive } from "lucide-react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
@@ -90,6 +90,30 @@ export default function Dashboard() {
     },
   });
 
+  // MikroTik Real-time Data
+  const { data: onlineUsers } = useQuery({
+    queryKey: ["mikrotik-online-users"],
+    queryFn: async () => {
+      const { data, error } = await supabase.functions.invoke("mikrotik-online-users");
+      if (error) throw error;
+      return data || [];
+    },
+    refetchInterval: 10000,
+  });
+
+  const { data: systemStats } = useQuery({
+    queryKey: ["mikrotik-system"],
+    queryFn: async () => {
+      const { data, error } = await supabase.functions.invoke("mikrotik-system");
+      if (error) throw error;
+      return data;
+    },
+    refetchInterval: 5000,
+  });
+
+  const pppoeUsers = onlineUsers?.filter((u: any) => u.type === "pppoe")?.length || 0;
+  const hotspotUsers = onlineUsers?.filter((u: any) => u.type === "hotspot")?.length || 0;
+
   const stats = [
     {
       title: "Total Customers",
@@ -125,6 +149,33 @@ export default function Dashboard() {
     },
   ];
 
+  const mikrotikStats = [
+    {
+      title: "Online Users",
+      value: onlineUsers?.length || 0,
+      subtitle: `${pppoeUsers} PPPoE • ${hotspotUsers} Hotspot`,
+      icon: Wifi,
+      color: "text-success",
+      bgColor: "bg-success/10",
+    },
+    {
+      title: "CPU Usage",
+      value: `${systemStats?.cpu || 0}%`,
+      subtitle: systemStats?.board || "Router",
+      icon: Cpu,
+      color: "text-warning",
+      bgColor: "bg-warning/10",
+    },
+    {
+      title: "Memory Usage",
+      value: `${systemStats?.memory || 0}%`,
+      subtitle: systemStats?.uptime || "0d 0h 0m",
+      icon: HardDrive,
+      color: "text-info",
+      bgColor: "bg-info/10",
+    },
+  ];
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -154,6 +205,31 @@ export default function Dashboard() {
               </CardContent>
             </Card>
           ))}
+        </div>
+
+        <div>
+          <h3 className="text-xl font-semibold text-foreground mb-4 flex items-center gap-2">
+            <Activity className="h-5 w-5 text-primary animate-pulse" />
+            MikroTik Real-time Status
+          </h3>
+          <div className="grid gap-4 md:grid-cols-3">
+            {mikrotikStats.map((stat) => (
+              <Card key={stat.title} className="shadow-soft hover:shadow-elegant transition-all duration-300 border-l-4" style={{ borderLeftColor: `hsl(var(--${stat.color.split('-')[1]}))` }}>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">
+                    {stat.title}
+                  </CardTitle>
+                  <div className={`rounded-full p-2 ${stat.bgColor}`}>
+                    <stat.icon className={`h-4 w-4 ${stat.color}`} />
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-foreground">{stat.value}</div>
+                  <p className="text-xs text-muted-foreground mt-1">{stat.subtitle}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
         </div>
 
         {overdueInvoices && overdueInvoices.length > 0 && (
