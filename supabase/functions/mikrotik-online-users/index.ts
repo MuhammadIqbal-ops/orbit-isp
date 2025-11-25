@@ -30,7 +30,9 @@ serve(async (req) => {
 
     console.log(`Fetching online users from MikroTik at ${settings.host}`);
 
+    // REST API uses port 80 (HTTP) or 443 (HTTPS), not 8728
     const protocol = settings.ssl ? 'https' : 'http';
+    const restPort = settings.ssl ? 443 : 80;
     const auth = btoa(`${settings.username}:${settings.password}`);
     const headers = {
       'Authorization': `Basic ${auth}`,
@@ -38,7 +40,7 @@ serve(async (req) => {
     };
 
     // Fetch PPPoE active connections
-    const pppoeUrl = `${protocol}://${settings.host}/rest/ppp/active`;
+    const pppoeUrl = `${protocol}://${settings.host}:${restPort}/rest/ppp/active`;
     const pppoeResponse = await fetch(pppoeUrl, { method: 'GET', headers });
     
     let pppoeUsers = [];
@@ -50,7 +52,7 @@ serve(async (req) => {
     }
 
     // Fetch Hotspot active connections
-    const hotspotUrl = `${protocol}://${settings.host}/rest/ip/hotspot/active`;
+    const hotspotUrl = `${protocol}://${settings.host}:${restPort}/rest/ip/hotspot/active`;
     const hotspotResponse = await fetch(hotspotUrl, { method: 'GET', headers });
     
     let hotspotUsers = [];
