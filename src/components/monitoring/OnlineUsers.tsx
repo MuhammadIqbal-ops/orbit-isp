@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Users, Wifi, Clock, TrendingDown, TrendingUp, Signal } from "lucide-react";
+import { Users, Wifi, Clock, TrendingDown, TrendingUp, Signal, Info } from "lucide-react";
+import { UserDetailModal } from "./UserDetailModal";
 
 interface OnlineUser {
   id: string;
@@ -18,6 +20,7 @@ interface OnlineUser {
 export function OnlineUsers() {
   const [users, setUsers] = useState<OnlineUser[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedUser, setSelectedUser] = useState<{ username: string; type: string } | null>(null);
 
   const fetchOnlineUsers = async () => {
     try {
@@ -140,16 +143,35 @@ export function OnlineUsers() {
               </div>
 
               {/* Status Indicator */}
-              <div className="flex items-center gap-2 pt-2">
+              <div className="flex items-center justify-between gap-2 pt-2">
                 <div className="flex items-center gap-1.5">
                   <div className="h-2 w-2 rounded-full bg-success animate-pulse" />
                   <span className="text-xs text-success font-medium">Active</span>
                 </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSelectedUser({ username: user.username, type: user.type })}
+                  className="h-7 text-xs"
+                >
+                  <Info className="h-3 w-3 mr-1" />
+                  Details
+                </Button>
               </div>
             </div>
           </Card>
         ))}
       </div>
+
+      {/* User Detail Modal */}
+      {selectedUser && (
+        <UserDetailModal
+          isOpen={!!selectedUser}
+          onClose={() => setSelectedUser(null)}
+          username={selectedUser.username}
+          type={selectedUser.type}
+        />
+      )}
     </div>
   );
 }
