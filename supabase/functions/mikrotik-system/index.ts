@@ -31,27 +31,42 @@ serve(async (req) => {
     console.log(`Connecting to MikroTik at ${settings.host}:${settings.port}`);
 
     // Connect to MikroTik REST API (v7)
-    // REST API uses port 80 (HTTP) or 443 (HTTPS), not 8728 (API socket port)
+    // Try default HTTP/HTTPS ports first, then fall back to configured port
     const protocol = settings.ssl ? 'https' : 'http';
-    const restPort = settings.ssl ? 443 : 80;
-    const apiUrl = `${protocol}://${settings.host}:${restPort}/rest/system/resource`;
+    const defaultPort = settings.ssl ? 443 : 80;
+    const candidatePorts = Array.from(new Set([defaultPort, settings.port]));
     const auth = btoa(`${settings.username}:${settings.password}`);
 
-    const response = await fetch(apiUrl, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Basic ${auth}`,
-        'Content-Type': 'application/json'
-      }
-    });
+    let lastError: string | null = null;
+    let data: any = null;
 
-    if (!response.ok) {
-      console.error(`MikroTik API error: ${response.status} ${response.statusText}`);
-      throw new Error(`Failed to connect to MikroTik: ${response.statusText}`);
+    for (const port of candidatePorts) {
+      const apiUrl = `${protocol}://${settings.host}:${port}/rest/system/resource`;
+      console.log(`Trying MikroTik REST at ${apiUrl}`);
+
+      const response = await fetch(apiUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Basic ${auth}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        data = await response.json();
+        console.log("MikroTik system data:", data);
+        lastError = null;
+        break;
+      } else {
+        const text = await response.text();
+        console.error(`MikroTik API error on port ${port}: ${response.status} ${response.statusText} - ${text}`);
+        lastError = `${response.status} ${response.statusText}`;
+      }
     }
 
-    const data = await response.json();
-    console.log("MikroTik system data:", data);
+    if (!data) {
+      throw new Error(`Failed to connect to MikroTik REST API: ${lastError}`);
+    }
 
     // Parse uptime from seconds to readable format
     const uptimeSeconds = parseInt(data.uptime || 0);

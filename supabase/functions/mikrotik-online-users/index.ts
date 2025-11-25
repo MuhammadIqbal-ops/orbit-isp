@@ -30,37 +30,55 @@ serve(async (req) => {
 
     console.log(`Fetching online users from MikroTik at ${settings.host}`);
 
-    // REST API uses port 80 (HTTP) or 443 (HTTPS), not 8728
+    // REST API uses port 80 (HTTP) or 443 (HTTPS) by default; also try configured port
     const protocol = settings.ssl ? 'https' : 'http';
-    const restPort = settings.ssl ? 443 : 80;
+    const defaultPort = settings.ssl ? 443 : 80;
+    const candidatePorts = Array.from(new Set([defaultPort, settings.port]));
     const auth = btoa(`${settings.username}:${settings.password}`);
-    const headers = {
-      'Authorization': `Basic ${auth}`,
-      'Content-Type': 'application/json'
-    };
 
-    // Fetch PPPoE active connections
-    const pppoeUrl = `${protocol}://${settings.host}:${restPort}/rest/ppp/active`;
-    const pppoeResponse = await fetch(pppoeUrl, { method: 'GET', headers });
-    
-    let pppoeUsers = [];
-    if (pppoeResponse.ok) {
-      pppoeUsers = await pppoeResponse.json();
-      console.log(`Found ${pppoeUsers.length} active PPPoE users`);
-    } else {
-      console.error(`Failed to fetch PPPoE users: ${pppoeResponse.status}`);
+    let pppoeUsers: any[] = [];
+    let hotspotUsers: any[] = [];
+    let lastError: string | null = null;
+
+    for (const port of candidatePorts) {
+      const baseUrl = `${protocol}://${settings.host}:${port}/rest`;
+      const headers = {
+        'Authorization': `Basic ${auth}`,
+        'Content-Type': 'application/json'
+      };
+
+      console.log(`Trying MikroTik REST for users at ${baseUrl}`);
+
+      // Fetch PPPoE active connections
+      const pppoeResponse = await fetch(`${baseUrl}/ppp/active`, { method: 'GET', headers });
+      
+      if (pppoeResponse.ok) {
+        pppoeUsers = await pppoeResponse.json();
+        console.log(`Found ${pppoeUsers.length} active PPPoE users on port ${port}`);
+      } else {
+        const text = await pppoeResponse.text();
+        console.error(`Failed to fetch PPPoE users on port ${port}: ${pppoeResponse.status} ${pppoeResponse.statusText} - ${text}`);
+        lastError = `${pppoeResponse.status} ${pppoeResponse.statusText}`;
+        continue;
+      }
+
+      // Fetch Hotspot active connections
+      const hotspotResponse = await fetch(`${baseUrl}/ip/hotspot/active`, { method: 'GET', headers });
+      
+      if (hotspotResponse.ok) {
+        hotspotUsers = await hotspotResponse.json();
+        console.log(`Found ${hotspotUsers.length} active Hotspot users on port ${port}`);
+        lastError = null;
+        break;
+      } else {
+        const text = await hotspotResponse.text();
+        console.error(`Failed to fetch Hotspot users on port ${port}: ${hotspotResponse.status} ${hotspotResponse.statusText} - ${text}`);
+        lastError = `${hotspotResponse.status} ${hotspotResponse.statusText}`;
+      }
     }
 
-    // Fetch Hotspot active connections
-    const hotspotUrl = `${protocol}://${settings.host}:${restPort}/rest/ip/hotspot/active`;
-    const hotspotResponse = await fetch(hotspotUrl, { method: 'GET', headers });
-    
-    let hotspotUsers = [];
-    if (hotspotResponse.ok) {
-      hotspotUsers = await hotspotResponse.json();
-      console.log(`Found ${hotspotUsers.length} active Hotspot users`);
-    } else {
-      console.error(`Failed to fetch Hotspot users: ${hotspotResponse.status}`);
+    if (lastError && pppoeUsers.length === 0 && hotspotUsers.length === 0) {
+      throw new Error(`Failed to fetch online users from MikroTik REST API: ${lastError}`);
     }
 
     // Helper to format uptime

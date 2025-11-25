@@ -33,25 +33,41 @@ serve(async (req) => {
 
     console.log(`Fetching traffic data from MikroTik at ${settings.host}`);
 
-    // REST API uses port 80 (HTTP) or 443 (HTTPS), not 8728
+    // REST API uses port 80 (HTTP) or 443 (HTTPS) by default; also try configured port
     const protocol = settings.ssl ? 'https' : 'http';
-    const restPort = settings.ssl ? 443 : 80;
+    const defaultPort = settings.ssl ? 443 : 80;
+    const candidatePorts = Array.from(new Set([defaultPort, settings.port]));
     const auth = btoa(`${settings.username}:${settings.password}`);
     const headers = {
       'Authorization': `Basic ${auth}`,
       'Content-Type': 'application/json'
     };
 
-    // Fetch all interfaces
-    const interfacesUrl = `${protocol}://${settings.host}:${restPort}/rest/interface`;
-    const interfacesResponse = await fetch(interfacesUrl, { method: 'GET', headers });
+    let interfaces: any[] | null = null;
+    let lastError: string | null = null;
 
-    if (!interfacesResponse.ok) {
-      throw new Error(`Failed to fetch interfaces: ${interfacesResponse.statusText}`);
+    for (const port of candidatePorts) {
+      const interfacesUrl = `${protocol}://${settings.host}:${port}/rest/interface`;
+      console.log(`Trying MikroTik REST for interfaces at ${interfacesUrl}`);
+
+      const interfacesResponse = await fetch(interfacesUrl, { method: 'GET', headers });
+
+      if (interfacesResponse.ok) {
+        const json = await interfacesResponse.json();
+        interfaces = Array.isArray(json) ? json : [];
+        console.log(`Found ${interfaces.length} interfaces on port ${port}`);
+        lastError = null;
+        break;
+      } else {
+        const text = await interfacesResponse.text();
+        console.error(`Failed to fetch interfaces on port ${port}: ${interfacesResponse.status} ${interfacesResponse.statusText} - ${text}`);
+        lastError = `${interfacesResponse.status} ${interfacesResponse.statusText}`;
+      }
     }
 
-    const interfaces = await interfacesResponse.json();
-    console.log(`Found ${interfaces.length} interfaces`);
+    if (!interfaces || interfaces.length === 0) {
+      throw new Error(`Failed to fetch interfaces from MikroTik REST API: ${lastError || 'no interfaces returned'}`);
+    }
 
     // Find WAN interface (usually ether1 or interface with default route)
     // For now, we'll aggregate all non-bridge/non-vlan interfaces
