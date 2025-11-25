@@ -19,7 +19,11 @@ export function TrafficGraph() {
       if (error) throw error;
       setTrafficData(data || []);
     } catch (error: any) {
-      toast.error("Failed to fetch traffic data");
+      console.error("MikroTik traffic data error:", error);
+      // Keep existing data or show empty array
+      if (trafficData.length === 0) {
+        setTrafficData([]);
+      }
     }
   };
 

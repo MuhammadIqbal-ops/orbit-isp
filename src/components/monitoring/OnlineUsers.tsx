@@ -28,9 +28,11 @@ export function OnlineUsers() {
       
       if (error) throw error;
       setUsers(data || []);
+      setLoading(false);
     } catch (error: any) {
-      toast.error("Failed to fetch online users");
-    } finally {
+      console.error("MikroTik connection error:", error);
+      toast.error("Cannot connect to MikroTik router. Please check router settings.");
+      setUsers([]);
       setLoading(false);
     }
   };

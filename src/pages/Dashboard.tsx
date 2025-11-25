@@ -94,21 +94,35 @@ export default function Dashboard() {
   const { data: onlineUsers } = useQuery({
     queryKey: ["mikrotik-online-users"],
     queryFn: async () => {
-      const { data, error } = await supabase.functions.invoke("mikrotik-online-users");
-      if (error) throw error;
-      return data || [];
+      try {
+        const { data, error } = await supabase.functions.invoke("mikrotik-online-users");
+        if (error) throw error;
+        return data || [];
+      } catch (error) {
+        console.error("MikroTik online users error:", error);
+        return [];
+      }
     },
     refetchInterval: 10000,
+    retry: 2,
+    retryDelay: 1000,
   });
 
   const { data: systemStats } = useQuery({
     queryKey: ["mikrotik-system"],
     queryFn: async () => {
-      const { data, error } = await supabase.functions.invoke("mikrotik-system");
-      if (error) throw error;
-      return data;
+      try {
+        const { data, error } = await supabase.functions.invoke("mikrotik-system");
+        if (error) throw error;
+        return data;
+      } catch (error) {
+        console.error("MikroTik system stats error:", error);
+        return { cpu: 0, memory: 0, uptime: "N/A", board: "MikroTik" };
+      }
     },
     refetchInterval: 5000,
+    retry: 2,
+    retryDelay: 1000,
   });
 
   const pppoeUsers = onlineUsers?.filter((u: any) => u.type === "pppoe")?.length || 0;
