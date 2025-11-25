@@ -290,27 +290,51 @@ serve(async (req) => {
                    .trim();
     };
 
+    // Helper to format bytes to human readable
+    const formatBytes = (bytes: number) => {
+      if (bytes === 0) return "0 B/s";
+      const k = 1024;
+      const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    };
+
     // Format PPPoE users
-    const formattedPPPoE = pppoeUsers.map((user: any) => ({
-      id: user['.id'] || user.id,
-      username: user.name || user.username || "unknown",
-      type: "pppoe",
-      address: user.address || "N/A",
-      uptime: formatUptime(user.uptime || ""),
-      downloadSpeed: "N/A",
-      uploadSpeed: "N/A",
-    }));
+    const formattedPPPoE = pppoeUsers.map((user: any) => {
+      // Calculate bandwidth from bytes (rx-byte and tx-byte are total, we need rate)
+      const rxRate = parseInt(user['rx-rate'] || user.rxRate || 0);
+      const txRate = parseInt(user['tx-rate'] || user.txRate || 0);
+      
+      return {
+        id: user['.id'] || user.id,
+        username: user.name || user.username || "unknown",
+        type: "pppoe",
+        address: user.address || "N/A",
+        uptime: formatUptime(user.uptime || ""),
+        downloadSpeed: formatBytes(rxRate),
+        uploadSpeed: formatBytes(txRate),
+      };
+    });
 
     // Format Hotspot users
-    const formattedHotspot = hotspotUsers.map((user: any) => ({
-      id: user['.id'] || user.id,
-      username: user.user || user.username || "unknown",
-      type: "hotspot",
-      address: user.address || "N/A",
-      uptime: formatUptime(user.uptime || ""),
-      downloadSpeed: "N/A",
-      uploadSpeed: "N/A",
-    }));
+    const formattedHotspot = hotspotUsers.map((user: any) => {
+      // Get username - hotspot uses 'user' field
+      const username = user.user || user.name || user.username || user.address || "Guest";
+      
+      // Calculate bandwidth
+      const rxRate = parseInt(user['rx-rate'] || user.rxRate || 0);
+      const txRate = parseInt(user['tx-rate'] || user.txRate || 0);
+      
+      return {
+        id: user['.id'] || user.id,
+        username: username,
+        type: "hotspot",
+        address: user.address || "N/A",
+        uptime: formatUptime(user.uptime || ""),
+        downloadSpeed: formatBytes(rxRate),
+        uploadSpeed: formatBytes(txRate),
+      };
+    });
 
     const onlineUsers = [...formattedPPPoE, ...formattedHotspot];
 
