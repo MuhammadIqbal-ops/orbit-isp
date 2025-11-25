@@ -191,10 +191,10 @@ serve(async (req) => {
     let hotspotUsers: any[] = [];
     let lastError: string | null = null;
 
-    // Try REST API first (RouterOS v7)
+    // Try REST API first (RouterOS v7) - only on HTTP/HTTPS ports
     const protocol = settings.ssl ? 'https' : 'http';
     const defaultPort = settings.ssl ? 443 : 80;
-    const restPorts = Array.from(new Set([defaultPort, settings.port]));
+    const restPorts = [defaultPort];
     const auth = btoa(`${settings.username}:${settings.password}`);
 
     for (const port of restPorts) {
@@ -205,65 +205,72 @@ serve(async (req) => {
           'Content-Type': 'application/json'
         };
 
-        console.log(`Trying MikroTik REST for users at ${baseUrl}`);
+        console.log(`Trying MikroTik REST API for users at ${baseUrl}`);
 
         // Fetch PPPoE active connections
-        const pppoeResponse = await fetch(`${baseUrl}/ppp/active`, { method: 'GET', headers });
+        const pppoeResponse = await fetch(`${baseUrl}/ppp/active`, { 
+          method: 'GET', 
+          headers,
+          signal: AbortSignal.timeout(5000)
+        });
         
         if (pppoeResponse.ok) {
           pppoeUsers = await pppoeResponse.json();
-          console.log(`Found ${pppoeUsers.length} active PPPoE users on port ${port}`);
+          console.log(`Found ${pppoeUsers.length} active PPPoE users via REST`);
         } else {
-          console.log(`Failed to fetch PPPoE users on port ${port}: ${pppoeResponse.status}`);
+          console.log(`Failed to fetch PPPoE users via REST: ${pppoeResponse.status}`);
           lastError = `REST ${pppoeResponse.status}`;
           continue;
         }
 
         // Fetch Hotspot active connections
-        const hotspotResponse = await fetch(`${baseUrl}/ip/hotspot/active`, { method: 'GET', headers });
+        const hotspotResponse = await fetch(`${baseUrl}/ip/hotspot/active`, { 
+          method: 'GET', 
+          headers,
+          signal: AbortSignal.timeout(5000)
+        });
         
         if (hotspotResponse.ok) {
           hotspotUsers = await hotspotResponse.json();
-          console.log(`Found ${hotspotUsers.length} active Hotspot users on port ${port}`);
+          console.log(`Found ${hotspotUsers.length} active Hotspot users via REST`);
           lastError = null;
           break;
         } else {
-          console.log(`Failed to fetch Hotspot users on port ${port}: ${hotspotResponse.status}`);
+          console.log(`Failed to fetch Hotspot users via REST: ${hotspotResponse.status}`);
           lastError = `REST ${hotspotResponse.status}`;
         }
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         lastError = message;
-        console.log(`REST error on port ${port}: ${message}`);
+        console.log(`REST API error: ${message}`);
       }
     }
 
-    // If REST failed, try API protocol (RouterOS v6)
-    if (lastError && pppoeUsers.length === 0 && hotspotUsers.length === 0) {
-      console.log("REST API failed, trying MikroTik API protocol...");
-      const apiPort = settings.port > 8000 ? settings.port : 8728;
+    // If REST failed, try API protocol (RouterOS v6/v7)
+    if (pppoeUsers.length === 0 && hotspotUsers.length === 0) {
+      console.log(`REST API failed. Trying MikroTik API protocol on port ${settings.port}...`);
       
       try {
-        const client = new MikrotikAPIClient(settings.host, apiPort, settings.username, settings.password);
+        const client = new MikrotikAPIClient(settings.host, settings.port, settings.username, settings.password);
         await client.connect();
-        console.log(`Connected via API protocol on port ${apiPort}`);
+        console.log(`✓ Connected via API protocol on port ${settings.port}`);
 
         // Fetch PPPoE active connections
         const pppoeResults = await client.command("/ppp/active/print");
         pppoeUsers = pppoeResults;
-        console.log(`Found ${pppoeUsers.length} active PPPoE users via API`);
+        console.log(`Found ${pppoeUsers.length} active PPPoE users via API protocol`);
 
         // Fetch Hotspot active connections
         const hotspotResults = await client.command("/ip/hotspot/active/print");
         hotspotUsers = hotspotResults;
-        console.log(`Found ${hotspotUsers.length} active Hotspot users via API`);
+        console.log(`Found ${hotspotUsers.length} active Hotspot users via API protocol`);
 
         client.close();
         lastError = null;
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         lastError = message;
-        console.error(`API protocol error: ${message}`);
+        console.error(`API protocol error on port ${settings.port}: ${message}`);
       }
     }
 

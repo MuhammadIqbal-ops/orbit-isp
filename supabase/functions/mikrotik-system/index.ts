@@ -190,61 +190,62 @@ serve(async (req) => {
     let data: any = null;
     let lastError: string | null = null;
 
-    // Try REST API first (RouterOS v7)
+    // Try REST API first (RouterOS v7) - only on HTTP/HTTPS ports
     const protocol = settings.ssl ? 'https' : 'http';
     const defaultPort = settings.ssl ? 443 : 80;
-    const restPorts = Array.from(new Set([defaultPort, settings.port]));
+    const restPorts = [defaultPort];
     const auth = btoa(`${settings.username}:${settings.password}`);
 
     for (const port of restPorts) {
       try {
         const apiUrl = `${protocol}://${settings.host}:${port}/rest/system/resource`;
-        console.log(`Trying MikroTik REST at ${apiUrl}`);
+        console.log(`Trying MikroTik REST API at ${apiUrl}`);
 
         const response = await fetch(apiUrl, {
           method: 'GET',
           headers: {
             'Authorization': `Basic ${auth}`,
             'Content-Type': 'application/json'
-          }
+          },
+          signal: AbortSignal.timeout(5000)
         });
 
         if (response.ok) {
           data = await response.json();
-          console.log("MikroTik system data (REST):", data);
+          console.log("MikroTik system data via REST API:", data);
           lastError = null;
           break;
         } else {
           lastError = `REST ${response.status}`;
-          console.log(`REST failed on port ${port}: ${response.status}`);
+          console.log(`REST API failed on port ${port}: ${response.status}`);
         }
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         lastError = message;
-        console.log(`REST error on port ${port}: ${message}`);
+        console.log(`REST API error on port ${port}: ${message}`);
       }
     }
 
-    // If REST failed, try API protocol (RouterOS v6)
+    // If REST failed, try API protocol (RouterOS v6/v7)
     if (!data) {
-      console.log("REST API failed, trying MikroTik API protocol...");
-      const apiPort = settings.port > 8000 ? settings.port : 8728;
+      console.log(`REST API failed. Trying MikroTik API protocol on port ${settings.port}...`);
       
       try {
-        const client = new MikrotikAPIClient(settings.host, apiPort, settings.username, settings.password);
+        const client = new MikrotikAPIClient(settings.host, settings.port, settings.username, settings.password);
         await client.connect();
-        console.log(`Connected via API protocol on port ${apiPort}`);
+        console.log(`✓ Connected via API protocol on port ${settings.port}`);
 
         const results = await client.command("/system/resource/print");
         if (results.length > 0) {
           data = results[0];
-          console.log("MikroTik system data (API):", data);
+          console.log("MikroTik system data via API protocol:", data);
+          lastError = null;
         }
         client.close();
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         lastError = message;
-        console.error(`API protocol error: ${message}`);
+        console.error(`API protocol error on port ${settings.port}: ${message}`);
       }
     }
 
