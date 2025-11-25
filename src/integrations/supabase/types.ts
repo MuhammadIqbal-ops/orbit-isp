@@ -14,6 +14,51 @@ export type Database = {
   }
   public: {
     Tables: {
+      billing_logs: {
+        Row: {
+          action: string
+          created_at: string
+          id: string
+          invoice_id: string | null
+          message: string
+          meta: Json | null
+          subscription_id: string | null
+        }
+        Insert: {
+          action: string
+          created_at?: string
+          id?: string
+          invoice_id?: string | null
+          message: string
+          meta?: Json | null
+          subscription_id?: string | null
+        }
+        Update: {
+          action?: string
+          created_at?: string
+          id?: string
+          invoice_id?: string | null
+          message?: string
+          meta?: Json | null
+          subscription_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_logs_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_logs_subscription_id_fkey"
+            columns: ["subscription_id"]
+            isOneToOne: false
+            referencedRelation: "subscriptions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       customers: {
         Row: {
           address: string | null
@@ -53,6 +98,9 @@ export type Database = {
           created_at: string
           due_date: string
           id: string
+          notes: string | null
+          payment_reference: string | null
+          payment_url: string | null
           status: string
           subscription_id: string
           updated_at: string
@@ -62,6 +110,9 @@ export type Database = {
           created_at?: string
           due_date: string
           id?: string
+          notes?: string | null
+          payment_reference?: string | null
+          payment_url?: string | null
           status?: string
           subscription_id: string
           updated_at?: string
@@ -71,6 +122,9 @@ export type Database = {
           created_at?: string
           due_date?: string
           id?: string
+          notes?: string | null
+          payment_reference?: string | null
+          payment_url?: string | null
           status?: string
           subscription_id?: string
           updated_at?: string
@@ -129,6 +183,7 @@ export type Database = {
           invoice_id: string
           method: string
           payment_date: string
+          transaction_id: string | null
         }
         Insert: {
           amount: number
@@ -137,6 +192,7 @@ export type Database = {
           invoice_id: string
           method: string
           payment_date?: string
+          transaction_id?: string | null
         }
         Update: {
           amount?: number
@@ -145,6 +201,7 @@ export type Database = {
           invoice_id?: string
           method?: string
           payment_date?: string
+          transaction_id?: string | null
         }
         Relationships: [
           {
