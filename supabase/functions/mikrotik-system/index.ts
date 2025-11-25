@@ -31,8 +31,10 @@ serve(async (req) => {
     console.log(`Connecting to MikroTik at ${settings.host}:${settings.port}`);
 
     // Connect to MikroTik REST API (v7)
+    // REST API uses port 80 (HTTP) or 443 (HTTPS), not 8728 (API socket port)
     const protocol = settings.ssl ? 'https' : 'http';
-    const apiUrl = `${protocol}://${settings.host}/rest/system/resource`;
+    const restPort = settings.ssl ? 443 : 80;
+    const apiUrl = `${protocol}://${settings.host}:${restPort}/rest/system/resource`;
     const auth = btoa(`${settings.username}:${settings.password}`);
 
     const response = await fetch(apiUrl, {

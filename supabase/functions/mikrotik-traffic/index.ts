@@ -33,7 +33,9 @@ serve(async (req) => {
 
     console.log(`Fetching traffic data from MikroTik at ${settings.host}`);
 
+    // REST API uses port 80 (HTTP) or 443 (HTTPS), not 8728
     const protocol = settings.ssl ? 'https' : 'http';
+    const restPort = settings.ssl ? 443 : 80;
     const auth = btoa(`${settings.username}:${settings.password}`);
     const headers = {
       'Authorization': `Basic ${auth}`,
@@ -41,7 +43,7 @@ serve(async (req) => {
     };
 
     // Fetch all interfaces
-    const interfacesUrl = `${protocol}://${settings.host}/rest/interface`;
+    const interfacesUrl = `${protocol}://${settings.host}:${restPort}/rest/interface`;
     const interfacesResponse = await fetch(interfacesUrl, { method: 'GET', headers });
 
     if (!interfacesResponse.ok) {
