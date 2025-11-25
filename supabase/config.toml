@@ -21,5 +21,8 @@ verify_jwt = true
 [functions.mikrotik-traffic]
 verify_jwt = true
 
+[functions.mikrotik-user-detail]
+verify_jwt = true
+
 [functions.process-subscriptions]
 verify_jwt = false
