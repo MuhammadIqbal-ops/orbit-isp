@@ -6,6 +6,163 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// MikroTik API Protocol implementation for Deno
+class MikrotikAPIClient {
+  private conn: Deno.Conn | null = null;
+  private host: string;
+  private port: number;
+  private username: string;
+  private password: string;
+
+  constructor(host: string, port: number, username: string, password: string) {
+    this.host = host;
+    this.port = port;
+    this.username = username;
+    this.password = password;
+  }
+
+  private encodeLength(len: number): Uint8Array {
+    if (len < 0x80) {
+      return new Uint8Array([len]);
+    } else if (len < 0x4000) {
+      return new Uint8Array([len >> 8 | 0x80, len & 0xFF]);
+    } else if (len < 0x200000) {
+      return new Uint8Array([len >> 16 | 0xC0, len >> 8 & 0xFF, len & 0xFF]);
+    } else if (len < 0x10000000) {
+      return new Uint8Array([len >> 24 | 0xE0, len >> 16 & 0xFF, len >> 8 & 0xFF, len & 0xFF]);
+    } else {
+      return new Uint8Array([0xF0, len >> 24 & 0xFF, len >> 16 & 0xFF, len >> 8 & 0xFF, len & 0xFF]);
+    }
+  }
+
+  private encodeWord(word: string): Uint8Array {
+    const encoder = new TextEncoder();
+    const wordBytes = encoder.encode(word);
+    const lengthBytes = this.encodeLength(wordBytes.length);
+    const result = new Uint8Array(lengthBytes.length + wordBytes.length);
+    result.set(lengthBytes, 0);
+    result.set(wordBytes, lengthBytes.length);
+    return result;
+  }
+
+  private async readLength(): Promise<number> {
+    if (!this.conn) throw new Error("Not connected");
+    
+    const firstByte = new Uint8Array(1);
+    await this.conn.read(firstByte);
+    const b = firstByte[0];
+
+    if ((b & 0x80) === 0) {
+      return b;
+    } else if ((b & 0xC0) === 0x80) {
+      const secondByte = new Uint8Array(1);
+      await this.conn.read(secondByte);
+      return ((b & 0x3F) << 8) + secondByte[0];
+    } else if ((b & 0xE0) === 0xC0) {
+      const bytes = new Uint8Array(2);
+      await this.conn.read(bytes);
+      return ((b & 0x1F) << 16) + (bytes[0] << 8) + bytes[1];
+    } else if ((b & 0xF0) === 0xE0) {
+      const bytes = new Uint8Array(3);
+      await this.conn.read(bytes);
+      return ((b & 0x0F) << 24) + (bytes[0] << 16) + (bytes[1] << 8) + bytes[2];
+    } else {
+      const bytes = new Uint8Array(4);
+      await this.conn.read(bytes);
+      return (bytes[0] << 24) + (bytes[1] << 16) + (bytes[2] << 8) + bytes[3];
+    }
+  }
+
+  private async readWord(): Promise<string> {
+    const len = await this.readLength();
+    if (len === 0) return "";
+    
+    const buffer = new Uint8Array(len);
+    await this.conn!.read(buffer);
+    return new TextDecoder().decode(buffer);
+  }
+
+  async connect(): Promise<void> {
+    try {
+      this.conn = await Deno.connect({ hostname: this.host, port: this.port });
+      
+      // Login
+      const loginCmd = new Uint8Array([
+        ...this.encodeWord("/login"),
+        ...this.encodeWord(`=name=${this.username}`),
+        ...this.encodeWord(`=password=${this.password}`),
+        0
+      ]);
+      await this.conn.write(loginCmd);
+
+      // Read response
+      let word = await this.readWord();
+      while (word !== "") {
+        word = await this.readWord();
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to connect to MikroTik API: ${message}`);
+    }
+  }
+
+  async command(cmd: string, params: Record<string, string> = {}): Promise<Record<string, any>[]> {
+    if (!this.conn) throw new Error("Not connected");
+
+    const words = [this.encodeWord(cmd)];
+    for (const [key, value] of Object.entries(params)) {
+      words.push(this.encodeWord(`=${key}=${value}`));
+    }
+    words.push(new Uint8Array([0]));
+
+    const cmdBytes = new Uint8Array(words.reduce((acc, w) => acc + w.length, 0));
+    let offset = 0;
+    for (const w of words) {
+      cmdBytes.set(w, offset);
+      offset += w.length;
+    }
+
+    await this.conn.write(cmdBytes);
+
+    const results: Record<string, any>[] = [];
+    let currentItem: Record<string, any> = {};
+
+    while (true) {
+      const word = await this.readWord();
+      
+      if (word === "") {
+        if (Object.keys(currentItem).length > 0) {
+          results.push(currentItem);
+          currentItem = {};
+        }
+        break;
+      } else if (word === "!done") {
+        if (Object.keys(currentItem).length > 0) {
+          results.push(currentItem);
+        }
+        break;
+      } else if (word === "!re") {
+        if (Object.keys(currentItem).length > 0) {
+          results.push(currentItem);
+          currentItem = {};
+        }
+      } else if (word.startsWith("=")) {
+        const [key, ...valueParts] = word.substring(1).split("=");
+        currentItem[key] = valueParts.join("=");
+      }
+    }
+
+    return results;
+  }
+
+  close() {
+    if (this.conn) {
+      this.conn.close();
+      this.conn = null;
+    }
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -30,55 +187,88 @@ serve(async (req) => {
 
     console.log(`Fetching online users from MikroTik at ${settings.host}`);
 
-    // REST API uses port 80 (HTTP) or 443 (HTTPS) by default; also try configured port
-    const protocol = settings.ssl ? 'https' : 'http';
-    const defaultPort = settings.ssl ? 443 : 80;
-    const candidatePorts = Array.from(new Set([defaultPort, settings.port]));
-    const auth = btoa(`${settings.username}:${settings.password}`);
-
     let pppoeUsers: any[] = [];
     let hotspotUsers: any[] = [];
     let lastError: string | null = null;
 
-    for (const port of candidatePorts) {
-      const baseUrl = `${protocol}://${settings.host}:${port}/rest`;
-      const headers = {
-        'Authorization': `Basic ${auth}`,
-        'Content-Type': 'application/json'
-      };
+    // Try REST API first (RouterOS v7)
+    const protocol = settings.ssl ? 'https' : 'http';
+    const defaultPort = settings.ssl ? 443 : 80;
+    const restPorts = Array.from(new Set([defaultPort, settings.port]));
+    const auth = btoa(`${settings.username}:${settings.password}`);
 
-      console.log(`Trying MikroTik REST for users at ${baseUrl}`);
+    for (const port of restPorts) {
+      try {
+        const baseUrl = `${protocol}://${settings.host}:${port}/rest`;
+        const headers = {
+          'Authorization': `Basic ${auth}`,
+          'Content-Type': 'application/json'
+        };
 
-      // Fetch PPPoE active connections
-      const pppoeResponse = await fetch(`${baseUrl}/ppp/active`, { method: 'GET', headers });
-      
-      if (pppoeResponse.ok) {
-        pppoeUsers = await pppoeResponse.json();
-        console.log(`Found ${pppoeUsers.length} active PPPoE users on port ${port}`);
-      } else {
-        const text = await pppoeResponse.text();
-        console.error(`Failed to fetch PPPoE users on port ${port}: ${pppoeResponse.status} ${pppoeResponse.statusText} - ${text}`);
-        lastError = `${pppoeResponse.status} ${pppoeResponse.statusText}`;
-        continue;
+        console.log(`Trying MikroTik REST for users at ${baseUrl}`);
+
+        // Fetch PPPoE active connections
+        const pppoeResponse = await fetch(`${baseUrl}/ppp/active`, { method: 'GET', headers });
+        
+        if (pppoeResponse.ok) {
+          pppoeUsers = await pppoeResponse.json();
+          console.log(`Found ${pppoeUsers.length} active PPPoE users on port ${port}`);
+        } else {
+          console.log(`Failed to fetch PPPoE users on port ${port}: ${pppoeResponse.status}`);
+          lastError = `REST ${pppoeResponse.status}`;
+          continue;
+        }
+
+        // Fetch Hotspot active connections
+        const hotspotResponse = await fetch(`${baseUrl}/ip/hotspot/active`, { method: 'GET', headers });
+        
+        if (hotspotResponse.ok) {
+          hotspotUsers = await hotspotResponse.json();
+          console.log(`Found ${hotspotUsers.length} active Hotspot users on port ${port}`);
+          lastError = null;
+          break;
+        } else {
+          console.log(`Failed to fetch Hotspot users on port ${port}: ${hotspotResponse.status}`);
+          lastError = `REST ${hotspotResponse.status}`;
+        }
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        lastError = message;
+        console.log(`REST error on port ${port}: ${message}`);
       }
+    }
 
-      // Fetch Hotspot active connections
-      const hotspotResponse = await fetch(`${baseUrl}/ip/hotspot/active`, { method: 'GET', headers });
+    // If REST failed, try API protocol (RouterOS v6)
+    if (lastError && pppoeUsers.length === 0 && hotspotUsers.length === 0) {
+      console.log("REST API failed, trying MikroTik API protocol...");
+      const apiPort = settings.port > 8000 ? settings.port : 8728;
       
-      if (hotspotResponse.ok) {
-        hotspotUsers = await hotspotResponse.json();
-        console.log(`Found ${hotspotUsers.length} active Hotspot users on port ${port}`);
+      try {
+        const client = new MikrotikAPIClient(settings.host, apiPort, settings.username, settings.password);
+        await client.connect();
+        console.log(`Connected via API protocol on port ${apiPort}`);
+
+        // Fetch PPPoE active connections
+        const pppoeResults = await client.command("/ppp/active/print");
+        pppoeUsers = pppoeResults;
+        console.log(`Found ${pppoeUsers.length} active PPPoE users via API`);
+
+        // Fetch Hotspot active connections
+        const hotspotResults = await client.command("/ip/hotspot/active/print");
+        hotspotUsers = hotspotResults;
+        console.log(`Found ${hotspotUsers.length} active Hotspot users via API`);
+
+        client.close();
         lastError = null;
-        break;
-      } else {
-        const text = await hotspotResponse.text();
-        console.error(`Failed to fetch Hotspot users on port ${port}: ${hotspotResponse.status} ${hotspotResponse.statusText} - ${text}`);
-        lastError = `${hotspotResponse.status} ${hotspotResponse.statusText}`;
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        lastError = message;
+        console.error(`API protocol error: ${message}`);
       }
     }
 
     if (lastError && pppoeUsers.length === 0 && hotspotUsers.length === 0) {
-      throw new Error(`Failed to fetch online users from MikroTik REST API: ${lastError}`);
+      throw new Error(`Failed to fetch online users from MikroTik: ${lastError}`);
     }
 
     // Helper to format uptime
@@ -95,22 +285,22 @@ serve(async (req) => {
 
     // Format PPPoE users
     const formattedPPPoE = pppoeUsers.map((user: any) => ({
-      id: user['.id'],
-      username: user.name || "unknown",
+      id: user['.id'] || user.id,
+      username: user.name || user.username || "unknown",
       type: "pppoe",
       address: user.address || "N/A",
-      uptime: formatUptime(user.uptime),
-      downloadSpeed: "N/A", // Real-time speed requires additional API call
+      uptime: formatUptime(user.uptime || ""),
+      downloadSpeed: "N/A",
       uploadSpeed: "N/A",
     }));
 
     // Format Hotspot users
     const formattedHotspot = hotspotUsers.map((user: any) => ({
-      id: user['.id'],
-      username: user.user || "unknown",
+      id: user['.id'] || user.id,
+      username: user.user || user.username || "unknown",
       type: "hotspot",
       address: user.address || "N/A",
-      uptime: formatUptime(user.uptime),
+      uptime: formatUptime(user.uptime || ""),
       downloadSpeed: "N/A",
       uploadSpeed: "N/A",
     }));
@@ -120,7 +310,7 @@ serve(async (req) => {
     return new Response(JSON.stringify(onlineUsers), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error fetching online users:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
     return new Response(JSON.stringify({ error: message }), {
