@@ -33,10 +33,10 @@ const menuItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "Customers", url: "/customers", icon: Users, showBadge: true, badgeKey: "customers" },
   { title: "Packages", url: "/packages", icon: Package, showBadge: true, badgeKey: "packages" },
-  { title: "Subscriptions", url: "/subscriptions", icon: Wifi, showBadge: true, badgeKey: "subscriptions" },
+  { title: "Subscriptions", url: "/subscriptions", icon: Wifi, showBadge: true, badgeKey: "online-detail" },
   { title: "Invoices", url: "/invoices", icon: FileText },
   { title: "Payments", url: "/payments", icon: CreditCard },
-  { title: "Monitoring", url: "/monitoring", icon: Activity, showBadge: true, badgeKey: "online" },
+  { title: "Monitoring", url: "/monitoring", icon: Activity, showBadge: true, badgeKey: "online-total" },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
 
@@ -66,19 +66,20 @@ export function AppSidebar() {
     },
   });
 
-  const { data: activeSubscriptions } = useQuery({
-    queryKey: ["active-subscriptions-count"],
-    queryFn: async () => {
-      const { count } = await supabase.from("subscriptions").select("*", { count: "exact", head: true }).eq("status", "active");
-      return count || 0;
-    },
-  });
-
   const { data: onlineUsers } = useQuery({
-    queryKey: ["mikrotik-online-count"],
+    queryKey: ["mikrotik-online-sidebar"],
     queryFn: async () => {
-      const { data } = await supabase.functions.invoke("mikrotik-online-users");
-      return data?.length || 0;
+      const { data, error } = await supabase.functions.invoke("mikrotik-online-users");
+      if (error) return { total: 0, pppoe: 0, hotspot: 0 };
+      
+      const pppoeCount = data?.filter((u: any) => u.type === "pppoe")?.length || 0;
+      const hotspotCount = data?.filter((u: any) => u.type === "hotspot")?.length || 0;
+      
+      return {
+        total: data?.length || 0,
+        pppoe: pppoeCount,
+        hotspot: hotspotCount,
+      };
     },
     refetchInterval: 10000,
   });
@@ -89,10 +90,10 @@ export function AppSidebar() {
         return customersCount;
       case "packages":
         return packagesCount;
-      case "subscriptions":
-        return activeSubscriptions;
-      case "online":
-        return onlineUsers;
+      case "online-detail":
+        return onlineUsers ? `${onlineUsers.pppoe}/${onlineUsers.hotspot}` : "0/0";
+      case "online-total":
+        return onlineUsers?.total || 0;
       default:
         return null;
     }
