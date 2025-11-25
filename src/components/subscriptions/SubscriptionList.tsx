@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Edit, Trash2, Power, PowerOff } from "lucide-react";
+import { Edit, Trash2, Power, PowerOff, WifiOff } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,10 +35,27 @@ export function SubscriptionList({
   const [subscriptions, setSubscriptions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
 
   useEffect(() => {
     fetchSubscriptions();
+    fetchOnlineUsers();
+    
+    const interval = setInterval(fetchOnlineUsers, 30000);
+    return () => clearInterval(interval);
   }, [refreshTrigger]);
+
+  const fetchOnlineUsers = async () => {
+    try {
+      const { data, error } = await supabase.functions.invoke("mikrotik-online-users");
+      if (!error && data) {
+        const usernames = data.map((user: any) => user.name || user.username);
+        setOnlineUsers(usernames);
+      }
+    } catch (error) {
+      console.error("Error fetching online users:", error);
+    }
+  };
 
   const fetchSubscriptions = async () => {
     try {
@@ -48,7 +65,7 @@ export function SubscriptionList({
           `
           *,
           customers(name),
-          packages(name, bandwidth)
+          packages(name, bandwidth, type)
         `
         )
         .order("created_at", { ascending: false });
@@ -110,6 +127,24 @@ export function SubscriptionList({
     }
   };
 
+  const disconnectUser = async (username: string) => {
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        "mikrotik-disconnect-user",
+        {
+          body: { username },
+        }
+      );
+
+      if (error) throw error;
+
+      toast.success(`User ${username} disconnected successfully`);
+      fetchOnlineUsers();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to disconnect user");
+    }
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case "active":
@@ -135,7 +170,9 @@ export function SubscriptionList({
             <TableRow>
               <TableHead>Customer</TableHead>
               <TableHead>Package</TableHead>
-              <TableHead>PPPoE Username</TableHead>
+              <TableHead>Type</TableHead>
+              <TableHead>Username</TableHead>
+              <TableHead>Connection</TableHead>
               <TableHead>Start Date</TableHead>
               <TableHead>End Date</TableHead>
               <TableHead>Status</TableHead>
@@ -146,7 +183,7 @@ export function SubscriptionList({
           <TableBody>
             {subscriptions.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center text-muted-foreground">
+                <TableCell colSpan={10} className="text-center text-muted-foreground">
                   No subscriptions found
                 </TableCell>
               </TableRow>
@@ -162,8 +199,24 @@ export function SubscriptionList({
                       {subscription.packages?.bandwidth}
                     </div>
                   </TableCell>
+                  <TableCell>
+                    <Badge variant={subscription.packages?.type === "pppoe" ? "default" : "secondary"}>
+                      {subscription.packages?.type?.toUpperCase() || "N/A"}
+                    </Badge>
+                  </TableCell>
                   <TableCell className="font-mono text-sm">
                     {subscription.mikrotik_username}
+                  </TableCell>
+                  <TableCell>
+                    {onlineUsers.includes(subscription.mikrotik_username) ? (
+                      <Badge variant="default" className="bg-green-500">
+                        Online
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary">
+                        Offline
+                      </Badge>
+                    )}
                   </TableCell>
                   <TableCell>
                     {new Date(subscription.start_date).toLocaleDateString()}
@@ -181,6 +234,16 @@ export function SubscriptionList({
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
+                      {onlineUsers.includes(subscription.mikrotik_username) && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => disconnectUser(subscription.mikrotik_username)}
+                          title="Disconnect User"
+                        >
+                          <WifiOff className="h-4 w-4 text-red-500" />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon"
