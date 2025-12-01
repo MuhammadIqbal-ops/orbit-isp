@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import { supabase } from "@/integrations/supabase/client";
-import { toast } from "sonner";
+import { api } from "@/lib/api";
 
 interface TrafficData {
   time: string;
@@ -14,13 +13,13 @@ export function TrafficGraph() {
 
   const fetchTrafficData = async () => {
     try {
-      const { data, error } = await supabase.functions.invoke("mikrotik-traffic");
+      const response = await api.getMikrotikTraffic();
       
-      if (error) throw error;
-      setTrafficData(data || []);
-    } catch (error: any) {
+      if (response.success && response.data) {
+        setTrafficData(response.data as TrafficData[]);
+      }
+    } catch (error: unknown) {
       console.error("MikroTik traffic data error:", error);
-      // Keep existing data or show empty array
       if (trafficData.length === 0) {
         setTrafficData([]);
       }

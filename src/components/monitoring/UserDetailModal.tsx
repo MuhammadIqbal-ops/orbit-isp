@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { 
   User, 
@@ -65,15 +65,18 @@ export function UserDetailModal({ isOpen, onClose, username, type }: UserDetailM
   const fetchUserDetail = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke("mikrotik-user-detail", {
-        body: { username, type },
-      });
+      const response = await api.getMikrotikUserDetail(username, type);
 
-      if (error) throw error;
-      setUserDetail(data);
-    } catch (error: any) {
+      if (response.success && response.data) {
+        setUserDetail(response.data as UserDetail);
+      } else {
+        toast.error("Failed to fetch user details");
+        setUserDetail(null);
+      }
+    } catch (error: unknown) {
       toast.error("Failed to fetch user details");
       console.error(error);
+      setUserDetail(null);
     } finally {
       setLoading(false);
     }

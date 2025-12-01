@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { toast } from "sonner";
 
 const packageSchema = z.object({
@@ -88,17 +89,15 @@ export function PackageForm({ packageData, onSuccess, onCancel }: PackageFormPro
         toast.success("Package created successfully");
       }
 
-      // Sync to Mikrotik
+      // Sync to Mikrotik via Laravel API
       try {
-        const { error: syncError } = await supabase.functions.invoke("mikrotik-sync-package", {
-          body: { packageId },
-        });
+        const response = await api.syncPackageToMikrotik(packageId);
 
-        if (syncError) {
-          console.error("Mikrotik sync error:", syncError);
-          toast.warning("Package saved but Mikrotik sync failed");
-        } else {
+        if (response.success) {
           toast.success("Package synced to Mikrotik");
+        } else {
+          console.error("Mikrotik sync error:", response.error);
+          toast.warning("Package saved but Mikrotik sync failed");
         }
       } catch (syncError) {
         console.error("Mikrotik sync error:", syncError);

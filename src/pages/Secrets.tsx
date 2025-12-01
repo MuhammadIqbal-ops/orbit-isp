@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { SecretForm } from "@/components/secrets/SecretForm";
 import { SecretList } from "@/components/secrets/SecretList";
 import { Key, Plus, Download } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -39,29 +39,18 @@ export default function Secrets() {
   const handleImport = async () => {
     setImporting(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        toast.error("Please login first");
-        return;
-      }
+      const response = await api.importMikrotikSecrets();
 
-      const { data, error } = await supabase.functions.invoke('mikrotik-import-secrets', {
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
-      });
-
-      if (error) throw error;
-
-      if (data.success) {
-        toast.success(data.message);
+      if (response.success) {
+        const importedCount = (response.data as { imported?: number })?.imported || 0;
+        toast.success(`Successfully imported ${importedCount} secrets from MikroTik`);
         setRefreshTrigger(prev => prev + 1);
       } else {
-        toast.error(data.error || 'Import failed');
+        toast.error(response.error || 'Import failed');
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Import error:', error);
-      toast.error(error.message || 'Failed to import secrets from MikroTik');
+      toast.error('Failed to import secrets from MikroTik');
     } finally {
       setImporting(false);
     }
