@@ -2,8 +2,7 @@ import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/integrations/supabase/client";
-import { toast } from "sonner";
+import { api } from "@/lib/api";
 import { Users, Wifi, Clock, TrendingDown, TrendingUp, Signal, Info } from "lucide-react";
 import { UserDetailModal } from "./UserDetailModal";
 
@@ -24,14 +23,16 @@ export function OnlineUsers() {
 
   const fetchOnlineUsers = async () => {
     try {
-      const { data, error } = await supabase.functions.invoke("mikrotik-online-users");
+      const response = await api.getMikrotikOnlineUsers();
       
-      if (error) throw error;
-      setUsers(data || []);
+      if (response.success && response.data) {
+        setUsers(response.data as OnlineUser[]);
+      } else {
+        setUsers([]);
+      }
       setLoading(false);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("MikroTik connection error:", error);
-      toast.error("Cannot connect to MikroTik router. Please check router settings.");
       setUsers([]);
       setLoading(false);
     }

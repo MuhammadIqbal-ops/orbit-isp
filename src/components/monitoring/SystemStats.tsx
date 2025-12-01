@@ -2,8 +2,7 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Cpu, HardDrive, Clock, Thermometer } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
-import { toast } from "sonner";
+import { api } from "@/lib/api";
 
 interface SystemData {
   cpu: number;
@@ -20,12 +19,15 @@ export function SystemStats() {
 
   const fetchSystemData = async () => {
     try {
-      const { data, error } = await supabase.functions.invoke("mikrotik-system");
+      const response = await api.getMikrotikSystem();
       
-      if (error) throw error;
-      setSystemData(data);
+      if (response.success && response.data) {
+        setSystemData(response.data as SystemData);
+      } else {
+        setSystemData(null);
+      }
       setLoading(false);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("MikroTik system data error:", error);
       setSystemData(null);
       setLoading(false);

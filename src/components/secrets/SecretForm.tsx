@@ -3,6 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -154,23 +155,15 @@ export function SecretForm({ secretId, onSuccess }: SecretFormProps) {
         form.reset();
       }
 
-      // Sync to MikroTik
+      // Sync to MikroTik via Laravel API
       const syncAction = secretId ? 'update' : 'create';
-      const { data: syncData, error: syncError } = await supabase.functions.invoke(
-        'mikrotik-sync-secret',
-        {
-          body: { 
-            action: syncAction, 
-            secretId: newSecretId 
-          }
-        }
-      );
+      const response = await api.syncMikrotikSecret(newSecretId!, syncAction);
 
-      if (syncError || !syncData?.success) {
-        console.error('MikroTik sync error:', syncError || syncData?.error);
-        toast.warning(`Secret saved but failed to sync to MikroTik: ${syncError?.message || syncData?.error || 'Unknown error'}`);
+      if (!response.success) {
+        console.error('MikroTik sync error:', response.error);
+        toast.warning(`Secret saved but failed to sync to MikroTik: ${response.error || 'Unknown error'}`);
       } else {
-        toast.success(`Secret synced to MikroTik via ${syncData.method}`);
+        toast.success(`Secret synced to MikroTik`);
       }
 
       onSuccess?.();

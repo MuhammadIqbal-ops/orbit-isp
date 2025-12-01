@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Edit, Trash2, RefreshCw } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -88,13 +89,13 @@ export function PackageList({ onEdit, refreshTrigger }: PackageListProps) {
   const handleSync = async (packageId: string) => {
     setSyncingId(packageId);
     try {
-      const { error } = await supabase.functions.invoke("mikrotik-sync-package", {
-        body: { packageId },
-      });
+      const response = await api.syncPackageToMikrotik(packageId);
 
-      if (error) throw error;
-
-      toast.success("Package synced to Mikrotik successfully");
+      if (response.success) {
+        toast.success("Package synced to Mikrotik successfully");
+      } else {
+        toast.error(response.error || "Failed to sync package to Mikrotik");
+      }
     } catch (error: any) {
       toast.error(error.message || "Failed to sync package to Mikrotik");
     } finally {

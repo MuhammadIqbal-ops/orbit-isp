@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { toast } from "sonner";
 import {
   Table,
@@ -64,20 +65,12 @@ export function SecretList({ onEdit, refreshTrigger }: SecretListProps) {
     if (!deleteId) return;
 
     try {
-      // Sync to MikroTik first (delete from router)
-      const { data: syncData, error: syncError } = await supabase.functions.invoke(
-        'mikrotik-sync-secret',
-        {
-          body: { 
-            action: 'delete', 
-            secretId: deleteId 
-          }
-        }
-      );
+      // Sync to MikroTik first (delete from router) via Laravel API
+      const response = await api.syncMikrotikSecret(deleteId, 'delete');
 
-      if (syncError || !syncData?.success) {
-        console.error('MikroTik sync error:', syncError || syncData?.error);
-        toast.warning(`Failed to delete from MikroTik: ${syncError?.message || syncData?.error || 'Unknown error'}`);
+      if (!response.success) {
+        console.error('MikroTik sync error:', response.error);
+        toast.warning(`Failed to delete from MikroTik: ${response.error || 'Unknown error'}`);
       }
 
       // Delete from database
