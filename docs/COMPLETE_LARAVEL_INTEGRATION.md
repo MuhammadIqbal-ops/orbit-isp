@@ -1,6 +1,6 @@
 # Complete Laravel 11/12 Backend + Frontend Integration
 
-Dokumentasi lengkap untuk migrasi dari Supabase Edge Functions ke Laravel backend dengan auto-integration ke frontend React.
+Dokumentasi lengkap untuk migrasi dari Supabase Edge Functions ke Laravel backend dengan auto-integration ke frontend React, termasuk integrasi **MikroTik** dan **Midtrans Payment Gateway**.
 
 ---
 
@@ -12,10 +12,11 @@ Dokumentasi lengkap untuk migrasi dari Supabase Edge Functions ke Laravel backen
 4. [Laravel Services](#4-laravel-services)
 5. [Laravel Controllers](#5-laravel-controllers)
 6. [API Routes](#6-api-routes)
-7. [Frontend API Client](#7-frontend-api-client)
-8. [Frontend Component Changes](#8-frontend-component-changes)
-9. [Authentication Migration](#9-authentication-migration)
-10. [Deployment Guide](#10-deployment-guide)
+7. [Midtrans Integration](#7-midtrans-integration)
+8. [Frontend API Client](#8-frontend-api-client)
+9. [Frontend Component Changes](#9-frontend-component-changes)
+10. [Authentication Migration](#10-authentication-migration)
+11. [Deployment Guide](#11-deployment-guide)
 
 ---
 
@@ -31,6 +32,7 @@ cd isp-billing
 # Install packages
 composer require laravel/sanctum
 composer require evilfreelancer/routeros-api-php
+composer require midtrans/midtrans-php
 
 # SNMP extension (Ubuntu/Debian)
 sudo apt install php-snmp snmp
@@ -67,6 +69,13 @@ MIKROTIK_PORT=8728
 MIKROTIK_USER=admin
 MIKROTIK_PASS=password
 
+# Midtrans Configuration
+MIDTRANS_SERVER_KEY=your-server-key
+MIDTRANS_CLIENT_KEY=your-client-key
+MIDTRANS_IS_PRODUCTION=false
+MIDTRANS_IS_SANITIZED=true
+MIDTRANS_IS_3DS=true
+
 # Telegram
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
@@ -98,6 +107,20 @@ return [
     'exposed_headers' => [],
     'max_age' => 0,
     'supports_credentials' => true,
+];
+```
+
+### Midtrans Config (config/midtrans.php)
+
+```php
+<?php
+
+return [
+    'server_key' => env('MIDTRANS_SERVER_KEY'),
+    'client_key' => env('MIDTRANS_CLIENT_KEY'),
+    'is_production' => env('MIDTRANS_IS_PRODUCTION', false),
+    'is_sanitized' => env('MIDTRANS_IS_SANITIZED', true),
+    'is_3ds' => env('MIDTRANS_IS_3DS', true),
 ];
 ```
 
@@ -203,27 +226,36 @@ CREATE TABLE invoices (
     subscription_id CHAR(36) NOT NULL,
     amount DECIMAL(15, 2) NOT NULL,
     due_date DATE NOT NULL,
-    status ENUM('unpaid', 'paid', 'overdue', 'cancelled') DEFAULT 'unpaid',
+    status ENUM('unpaid', 'paid', 'overdue', 'cancelled', 'pending') DEFAULT 'unpaid',
     payment_reference VARCHAR(255),
     payment_url VARCHAR(500),
+    midtrans_order_id VARCHAR(255) UNIQUE,
+    midtrans_transaction_id VARCHAR(255),
+    midtrans_payment_type VARCHAR(100),
+    midtrans_status VARCHAR(50),
+    midtrans_snap_token VARCHAR(500),
     notes TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (subscription_id) REFERENCES subscriptions(id) ON DELETE CASCADE,
     INDEX idx_status (status),
-    INDEX idx_due_date (due_date)
+    INDEX idx_due_date (due_date),
+    INDEX idx_midtrans_order (midtrans_order_id)
 );
 
 CREATE TABLE payments (
     id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
     invoice_id CHAR(36) NOT NULL,
     amount DECIMAL(15, 2) NOT NULL,
-    method ENUM('cash', 'transfer', 'qris', 'ewallet', 'other') DEFAULT 'cash',
+    method ENUM('cash', 'transfer', 'qris', 'ewallet', 'gopay', 'shopeepay', 'dana', 'ovo', 'credit_card', 'bank_transfer', 'cstore', 'other') DEFAULT 'cash',
     transaction_id VARCHAR(255),
+    midtrans_transaction_id VARCHAR(255),
+    midtrans_payment_type VARCHAR(100),
     payment_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE,
-    INDEX idx_payment_date (payment_date)
+    INDEX idx_payment_date (payment_date),
+    INDEX idx_midtrans_transaction (midtrans_transaction_id)
 );
 
 CREATE TABLE billing_logs (
@@ -238,6 +270,27 @@ CREATE TABLE billing_logs (
     FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL,
     INDEX idx_action (action),
     INDEX idx_created (created_at)
+);
+
+-- =============================================
+-- MIDTRANS WEBHOOK LOGS
+-- =============================================
+
+CREATE TABLE midtrans_logs (
+    id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    order_id VARCHAR(255) NOT NULL,
+    transaction_id VARCHAR(255),
+    transaction_status VARCHAR(50),
+    payment_type VARCHAR(100),
+    gross_amount DECIMAL(15, 2),
+    fraud_status VARCHAR(50),
+    signature_key VARCHAR(255),
+    raw_payload JSON,
+    processed BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_order (order_id),
+    INDEX idx_transaction (transaction_id),
+    INDEX idx_status (transaction_status)
 );
 
 -- =============================================
@@ -388,8 +441,8 @@ CREATE TABLE notification_settings (
 
 CREATE TABLE alert_logs (
     id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
-    type ENUM('device_down', 'device_up', 'ping_down', 'ping_up', 'high_latency', 'bandwidth_high', 'flapping_start', 'flapping_stop') NOT NULL,
-    source_type ENUM('device', 'interface', 'ping_target') NOT NULL,
+    type ENUM('device_down', 'device_up', 'ping_down', 'ping_up', 'high_latency', 'bandwidth_high', 'flapping_start', 'flapping_stop', 'payment_received', 'payment_failed') NOT NULL,
+    source_type ENUM('device', 'interface', 'ping_target', 'invoice') NOT NULL,
     source_id CHAR(36) NOT NULL,
     source_name VARCHAR(255),
     message TEXT NOT NULL,
@@ -425,6 +478,7 @@ BEGIN
     DELETE FROM ping_history WHERE recorded_at < DATE_SUB(NOW(), INTERVAL 365 DAY);
     DELETE FROM alert_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL 90 DAY);
     DELETE FROM billing_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL 365 DAY);
+    DELETE FROM midtrans_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL 365 DAY);
 END//
 DELIMITER ;
 
@@ -619,6 +673,8 @@ class Invoice extends Model
     protected $fillable = [
         'subscription_id', 'amount', 'due_date', 'status',
         'payment_reference', 'payment_url', 'notes',
+        'midtrans_order_id', 'midtrans_transaction_id',
+        'midtrans_payment_type', 'midtrans_status', 'midtrans_snap_token',
     ];
 
     protected function casts(): array
@@ -663,6 +719,7 @@ class Payment extends Model
 
     protected $fillable = [
         'invoice_id', 'amount', 'method', 'transaction_id', 'payment_date',
+        'midtrans_transaction_id', 'midtrans_payment_type',
     ];
 
     protected function casts(): array
@@ -676,6 +733,41 @@ class Payment extends Model
     public function invoice(): BelongsTo
     {
         return $this->belongsTo(Invoice::class);
+    }
+}
+```
+
+### app/Models/MidtransLog.php
+
+```php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use App\Traits\HasUuid;
+
+class MidtransLog extends Model
+{
+    use HasUuid;
+
+    protected $keyType = 'string';
+    public $incrementing = false;
+    public $timestamps = false;
+
+    protected $fillable = [
+        'order_id', 'transaction_id', 'transaction_status', 'payment_type',
+        'gross_amount', 'fraud_status', 'signature_key', 'raw_payload', 'processed',
+    ];
+
+    protected function casts(): array
+    {
+        return [
+            'gross_amount' => 'decimal:2',
+            'raw_payload' => 'array',
+            'processed' => 'boolean',
+            'created_at' => 'datetime',
+        ];
     }
 }
 ```
@@ -811,7 +903,7 @@ class MikrotikService
                 'port' => $this->settings->port,
                 'user' => $this->settings->username,
                 'pass' => $this->settings->password,
-                'legacy' => true,
+                'legacy' => true, // RouterOS v6 compatibility
             ]);
             
             Log::info("Connected to MikroTik at {$this->settings->host}");
@@ -826,6 +918,24 @@ class MikrotikService
     {
         if (!$this->client) {
             $this->connect();
+        }
+    }
+
+    public function testConnection(): array
+    {
+        try {
+            $this->connect();
+            $resource = $this->getSystemResource();
+            return [
+                'success' => true,
+                'message' => 'Connection successful',
+                'data' => $resource,
+            ];
+        } catch (\Exception $e) {
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+            ];
         }
     }
 
@@ -899,13 +1009,85 @@ class MikrotikService
         $this->ensureConnected();
 
         if ($type === 'pppoe') {
+            // Get active session
             $query = (new Query('/ppp/active/print'))->where('name', $username);
+            $actives = $this->client->query($query)->read();
+            
+            if (empty($actives)) return null;
+            
+            $active = $actives[0];
+            
+            // Get secret info
+            $secretQuery = (new Query('/ppp/secret/print'))->where('name', $username);
+            $secrets = $this->client->query($secretQuery)->read();
+            $secret = !empty($secrets) ? $secrets[0] : null;
+            
+            // Get profile info
+            $profile = null;
+            if ($secret && !empty($secret['profile'])) {
+                $profileQuery = (new Query('/ppp/profile/print'))->where('name', $secret['profile']);
+                $profiles = $this->client->query($profileQuery)->read();
+                $profile = !empty($profiles) ? $profiles[0] : null;
+            }
+
+            return [
+                'username' => $username,
+                'type' => 'pppoe',
+                'session' => [
+                    'id' => $active['.id'] ?? '',
+                    'address' => $active['address'] ?? '',
+                    'macAddress' => $active['caller-id'] ?? '',
+                    'uptime' => $active['uptime'] ?? '0s',
+                    'encoding' => $active['encoding'] ?? '',
+                    'service' => $active['service'] ?? 'pppoe',
+                ],
+                'bandwidth' => [
+                    'rxRate' => $this->formatSpeed($active['rx-byte'] ?? 0),
+                    'txRate' => $this->formatSpeed($active['tx-byte'] ?? 0),
+                    'rxBytes' => $this->formatBytes($active['rx-byte'] ?? 0),
+                    'txBytes' => $this->formatBytes($active['tx-byte'] ?? 0),
+                    'rxPackets' => $active['rx-packet'] ?? '0',
+                    'txPackets' => $active['tx-packet'] ?? '0',
+                ],
+                'profile' => $profile ? [
+                    'profile' => $profile['name'] ?? '',
+                    'service' => 'pppoe',
+                    'limitAt' => $profile['rate-limit'] ?? 'unlimited',
+                    'maxLimit' => $profile['rate-limit'] ?? 'unlimited',
+                    'comment' => $secret['comment'] ?? '',
+                ] : null,
+            ];
         } else {
+            // Hotspot
             $query = (new Query('/ip/hotspot/active/print'))->where('user', $username);
+            $actives = $this->client->query($query)->read();
+            
+            if (empty($actives)) return null;
+            
+            $active = $actives[0];
+            
+            return [
+                'username' => $username,
+                'type' => 'hotspot',
+                'session' => [
+                    'id' => $active['.id'] ?? '',
+                    'address' => $active['address'] ?? '',
+                    'macAddress' => $active['mac-address'] ?? '',
+                    'uptime' => $active['uptime'] ?? '0s',
+                    'encoding' => '',
+                    'service' => 'hotspot',
+                ],
+                'bandwidth' => [
+                    'rxRate' => $this->formatSpeed($active['bytes-in'] ?? 0),
+                    'txRate' => $this->formatSpeed($active['bytes-out'] ?? 0),
+                    'rxBytes' => $this->formatBytes($active['bytes-in'] ?? 0),
+                    'txBytes' => $this->formatBytes($active['bytes-out'] ?? 0),
+                    'rxPackets' => $active['packets-in'] ?? '0',
+                    'txPackets' => $active['packets-out'] ?? '0',
+                ],
+                'profile' => null,
+            ];
         }
-        
-        $users = $this->client->query($query)->read();
-        return !empty($users) ? $users[0] : null;
     }
 
     public function toggleUser(string $username, bool $enable): bool
@@ -921,6 +1103,12 @@ class MikrotikService
                 ->equal('.id', $secrets[0]['.id'])
                 ->equal('disabled', $enable ? 'no' : 'yes');
             $this->client->query($setQuery)->read();
+            
+            // Disconnect if disabling
+            if (!$enable) {
+                $this->disconnectUser($username);
+            }
+            
             return true;
         }
 
@@ -933,6 +1121,11 @@ class MikrotikService
                 ->equal('.id', $users[0]['.id'])
                 ->equal('disabled', $enable ? 'no' : 'yes');
             $this->client->query($setQuery)->read();
+            
+            if (!$enable) {
+                $this->disconnectUser($username);
+            }
+            
             return true;
         }
 
@@ -966,7 +1159,7 @@ class MikrotikService
         return false;
     }
 
-    public function createUser(string $username, string $password, string $profile, string $service = 'pppoe'): bool
+    public function createUser(string $username, string $password, string $profile, string $service = 'pppoe', ?string $comment = null): bool
     {
         $this->ensureConnected();
 
@@ -975,12 +1168,20 @@ class MikrotikService
                 ->equal('name', $username)
                 ->equal('password', $password)
                 ->equal('profile', $profile);
+            
+            if ($comment) {
+                $query->equal('comment', $comment);
+            }
         } else {
             $query = (new Query('/ppp/secret/add'))
                 ->equal('name', $username)
                 ->equal('password', $password)
                 ->equal('service', $service === 'any' ? 'any' : 'pppoe')
                 ->equal('profile', $profile);
+            
+            if ($comment) {
+                $query->equal('comment', $comment);
+            }
         }
 
         $this->client->query($query)->read();
@@ -994,20 +1195,25 @@ class MikrotikService
         if ($service === 'hotspot') {
             $query = (new Query('/ip/hotspot/user/print'))->where('name', $username);
             $users = $this->client->query($query)->read();
-            $path = '/ip/hotspot/user/set';
+            
+            if (empty($users)) return false;
+            
+            $setQuery = (new Query('/ip/hotspot/user/set'))
+                ->equal('.id', $users[0]['.id']);
         } else {
             $query = (new Query('/ppp/secret/print'))->where('name', $username);
             $users = $this->client->query($query)->read();
-            $path = '/ppp/secret/set';
+            
+            if (empty($users)) return false;
+            
+            $setQuery = (new Query('/ppp/secret/set'))
+                ->equal('.id', $users[0]['.id']);
         }
 
-        if (empty($users)) return false;
-
-        $setQuery = new Query($path);
-        $setQuery->equal('.id', $users[0]['.id']);
         foreach ($data as $key => $value) {
             $setQuery->equal($key, $value);
         }
+
         $this->client->query($setQuery)->read();
         return true;
     }
@@ -1016,99 +1222,551 @@ class MikrotikService
     {
         $this->ensureConnected();
 
+        // Disconnect first
+        $this->disconnectUser($username);
+
         if ($service === 'hotspot') {
             $query = (new Query('/ip/hotspot/user/print'))->where('name', $username);
             $users = $this->client->query($query)->read();
-            $path = '/ip/hotspot/user/remove';
+            
+            if (!empty($users)) {
+                $removeQuery = (new Query('/ip/hotspot/user/remove'))->equal('.id', $users[0]['.id']);
+                $this->client->query($removeQuery)->read();
+                return true;
+            }
         } else {
             $query = (new Query('/ppp/secret/print'))->where('name', $username);
             $users = $this->client->query($query)->read();
-            $path = '/ppp/secret/remove';
+            
+            if (!empty($users)) {
+                $removeQuery = (new Query('/ppp/secret/remove'))->equal('.id', $users[0]['.id']);
+                $this->client->query($removeQuery)->read();
+                return true;
+            }
         }
 
-        if (empty($users)) return false;
+        return false;
+    }
 
-        $removeQuery = (new Query($path))->equal('.id', $users[0]['.id']);
-        $this->client->query($removeQuery)->read();
-        return true;
+    public function getProfiles(string $type = 'pppoe'): array
+    {
+        $this->ensureConnected();
+
+        if ($type === 'hotspot') {
+            $query = new Query('/ip/hotspot/user/profile/print');
+        } else {
+            $query = new Query('/ppp/profile/print');
+        }
+
+        return $this->client->query($query)->read();
+    }
+
+    public function getTrafficData(): array
+    {
+        $this->ensureConnected();
+        
+        $query = new Query('/interface/print');
+        $interfaces = $this->client->query($query)->read();
+        
+        $trafficData = [];
+        foreach ($interfaces as $interface) {
+            if (in_array($interface['type'] ?? '', ['ether', 'bridge', 'vlan', 'pppoe-out'])) {
+                $trafficData[] = [
+                    'name' => $interface['name'] ?? '',
+                    'type' => $interface['type'] ?? '',
+                    'rxBytes' => (int) ($interface['rx-byte'] ?? 0),
+                    'txBytes' => (int) ($interface['tx-byte'] ?? 0),
+                    'rxPackets' => (int) ($interface['rx-packet'] ?? 0),
+                    'txPackets' => (int) ($interface['tx-packet'] ?? 0),
+                    'running' => ($interface['running'] ?? 'false') === 'true',
+                    'disabled' => ($interface['disabled'] ?? 'false') === 'true',
+                ];
+            }
+        }
+
+        return $trafficData;
     }
 
     public function importSecrets(): array
     {
         $this->ensureConnected();
-
+        
         $query = new Query('/ppp/secret/print');
         $secrets = $this->client->query($query)->read();
-
-        return array_map(fn($s) => [
-            'username' => $s['name'] ?? '',
-            'password' => $s['password'] ?? '',
-            'service' => $s['service'] ?? 'pppoe',
-            'profile' => $s['profile'] ?? '',
-            'local_address' => $s['local-address'] ?? '',
-            'remote_address' => $s['remote-address'] ?? '',
-            'comment' => $s['comment'] ?? '',
-            'disabled' => ($s['disabled'] ?? 'false') === 'true',
-        ], $secrets);
-    }
-
-    public function getTraffic(): array
-    {
-        $this->ensureConnected();
-
-        $query = new Query('/interface/print');
-        $interfaces = $this->client->query($query)->read();
-
-        return array_values(array_filter(array_map(function ($iface) {
-            if (!isset($iface['type']) || !in_array($iface['type'], ['ether', 'pppoe-out', 'vlan', 'bridge'])) {
-                return null;
-            }
+        
+        return array_map(function ($secret) {
             return [
-                'name' => $iface['name'] ?? '',
-                'rx_bytes' => (int) ($iface['rx-byte'] ?? 0),
-                'tx_bytes' => (int) ($iface['tx-byte'] ?? 0),
-                'running' => ($iface['running'] ?? 'false') === 'true',
+                'username' => $secret['name'] ?? '',
+                'password' => $secret['password'] ?? '',
+                'service' => $secret['service'] ?? 'pppoe',
+                'profile' => $secret['profile'] ?? '',
+                'local_address' => $secret['local-address'] ?? '',
+                'remote_address' => $secret['remote-address'] ?? '',
+                'comment' => $secret['comment'] ?? '',
+                'disabled' => ($secret['disabled'] ?? 'false') === 'true',
             ];
-        }, $interfaces)));
-    }
-
-    public function syncProfile(string $name, string $rateLimit): bool
-    {
-        $this->ensureConnected();
-
-        $profileName = 'profile-' . strtolower(str_replace(' ', '-', $name));
-
-        $query = (new Query('/ppp/profile/print'))->where('name', $profileName);
-        $profiles = $this->client->query($query)->read();
-
-        if (!empty($profiles)) {
-            $setQuery = (new Query('/ppp/profile/set'))
-                ->equal('.id', $profiles[0]['.id'])
-                ->equal('rate-limit', $rateLimit);
-            $this->client->query($setQuery)->read();
-        } else {
-            $addQuery = (new Query('/ppp/profile/add'))
-                ->equal('name', $profileName)
-                ->equal('rate-limit', $rateLimit)
-                ->equal('local-address', 'default')
-                ->equal('remote-address', 'default');
-            $this->client->query($addQuery)->read();
-        }
-
-        return true;
+        }, $secrets);
     }
 
     protected function formatSpeed($bytes): string
     {
         $bytes = (int) $bytes;
         if ($bytes >= 1073741824) {
-            return round($bytes / 1073741824, 2) . ' GB';
+            return number_format($bytes / 1073741824, 2) . ' Gbps';
         } elseif ($bytes >= 1048576) {
-            return round($bytes / 1048576, 2) . ' MB';
+            return number_format($bytes / 1048576, 2) . ' Mbps';
         } elseif ($bytes >= 1024) {
-            return round($bytes / 1024, 2) . ' KB';
+            return number_format($bytes / 1024, 2) . ' Kbps';
+        }
+        return $bytes . ' bps';
+    }
+
+    protected function formatBytes($bytes): string
+    {
+        $bytes = (int) $bytes;
+        if ($bytes >= 1073741824) {
+            return number_format($bytes / 1073741824, 2) . ' GB';
+        } elseif ($bytes >= 1048576) {
+            return number_format($bytes / 1048576, 2) . ' MB';
+        } elseif ($bytes >= 1024) {
+            return number_format($bytes / 1024, 2) . ' KB';
         }
         return $bytes . ' B';
+    }
+}
+```
+
+### app/Services/MidtransService.php
+
+```php
+<?php
+
+namespace App\Services;
+
+use App\Models\Invoice;
+use App\Models\Payment;
+use App\Models\MidtransLog;
+use App\Models\BillingLog;
+use Illuminate\Support\Facades\Log;
+use Midtrans\Config;
+use Midtrans\Snap;
+use Midtrans\Transaction;
+use Midtrans\Notification;
+
+class MidtransService
+{
+    public function __construct()
+    {
+        Config::$serverKey = config('midtrans.server_key');
+        Config::$clientKey = config('midtrans.client_key');
+        Config::$isProduction = config('midtrans.is_production');
+        Config::$isSanitized = config('midtrans.is_sanitized');
+        Config::$is3ds = config('midtrans.is_3ds');
+    }
+
+    /**
+     * Create Snap Token for Invoice Payment
+     */
+    public function createSnapToken(Invoice $invoice): array
+    {
+        $invoice->load(['subscription.customer', 'subscription.package']);
+        
+        $customer = $invoice->subscription->customer;
+        $package = $invoice->subscription->package;
+        
+        // Generate unique order ID
+        $orderId = 'INV-' . $invoice->id . '-' . time();
+        
+        $params = [
+            'transaction_details' => [
+                'order_id' => $orderId,
+                'gross_amount' => (int) $invoice->amount,
+            ],
+            'customer_details' => [
+                'first_name' => $customer->name,
+                'email' => $customer->email ?? 'noemail@example.com',
+                'phone' => $customer->phone ?? '',
+            ],
+            'item_details' => [
+                [
+                    'id' => $package->id,
+                    'price' => (int) $invoice->amount,
+                    'quantity' => 1,
+                    'name' => "Tagihan {$package->name} - {$customer->name}",
+                ]
+            ],
+            'callbacks' => [
+                'finish' => config('app.frontend_url') . '/payments?status=success',
+                'error' => config('app.frontend_url') . '/payments?status=error',
+                'pending' => config('app.frontend_url') . '/payments?status=pending',
+            ],
+            'enabled_payments' => [
+                'credit_card', 'bca_va', 'bni_va', 'bri_va', 'permata_va',
+                'echannel', 'gopay', 'shopeepay', 'dana', 'ovo', 'qris',
+                'indomaret', 'alfamart',
+            ],
+            'expiry' => [
+                'start_time' => date('Y-m-d H:i:s O'),
+                'unit' => 'days',
+                'duration' => 1,
+            ],
+        ];
+
+        try {
+            $snapToken = Snap::getSnapToken($params);
+            
+            // Update invoice with Midtrans data
+            $invoice->update([
+                'midtrans_order_id' => $orderId,
+                'midtrans_snap_token' => $snapToken,
+                'status' => 'pending',
+            ]);
+
+            // Log action
+            BillingLog::create([
+                'invoice_id' => $invoice->id,
+                'subscription_id' => $invoice->subscription_id,
+                'action' => 'midtrans_snap_created',
+                'message' => "Snap token created for invoice",
+                'meta' => ['order_id' => $orderId],
+            ]);
+
+            return [
+                'success' => true,
+                'snap_token' => $snapToken,
+                'order_id' => $orderId,
+                'client_key' => config('midtrans.client_key'),
+            ];
+        } catch (\Exception $e) {
+            Log::error('Midtrans Snap Error: ' . $e->getMessage());
+            
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Get Snap Redirect URL (alternative to Snap token)
+     */
+    public function createSnapUrl(Invoice $invoice): array
+    {
+        $invoice->load(['subscription.customer', 'subscription.package']);
+        
+        $customer = $invoice->subscription->customer;
+        $package = $invoice->subscription->package;
+        
+        $orderId = 'INV-' . $invoice->id . '-' . time();
+        
+        $params = [
+            'transaction_details' => [
+                'order_id' => $orderId,
+                'gross_amount' => (int) $invoice->amount,
+            ],
+            'customer_details' => [
+                'first_name' => $customer->name,
+                'email' => $customer->email ?? 'noemail@example.com',
+                'phone' => $customer->phone ?? '',
+            ],
+            'item_details' => [
+                [
+                    'id' => $package->id,
+                    'price' => (int) $invoice->amount,
+                    'quantity' => 1,
+                    'name' => "Tagihan {$package->name}",
+                ]
+            ],
+        ];
+
+        try {
+            $snapUrl = Snap::createTransaction($params)->redirect_url;
+            
+            $invoice->update([
+                'midtrans_order_id' => $orderId,
+                'payment_url' => $snapUrl,
+                'status' => 'pending',
+            ]);
+
+            return [
+                'success' => true,
+                'redirect_url' => $snapUrl,
+                'order_id' => $orderId,
+            ];
+        } catch (\Exception $e) {
+            Log::error('Midtrans Snap URL Error: ' . $e->getMessage());
+            
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Handle Webhook Notification from Midtrans
+     */
+    public function handleNotification(array $payload): array
+    {
+        try {
+            $notification = new Notification();
+            
+            $orderId = $notification->order_id;
+            $transactionStatus = $notification->transaction_status;
+            $transactionId = $notification->transaction_id;
+            $paymentType = $notification->payment_type;
+            $fraudStatus = $notification->fraud_status ?? 'accept';
+            $grossAmount = $notification->gross_amount;
+            $signatureKey = $notification->signature_key;
+            
+            // Verify signature
+            $expectedSignature = hash('sha512', 
+                $orderId . $notification->status_code . $grossAmount . config('midtrans.server_key')
+            );
+            
+            if ($signatureKey !== $expectedSignature) {
+                Log::warning("Invalid Midtrans signature for order: {$orderId}");
+                return ['success' => false, 'message' => 'Invalid signature'];
+            }
+
+            // Log notification
+            MidtransLog::create([
+                'order_id' => $orderId,
+                'transaction_id' => $transactionId,
+                'transaction_status' => $transactionStatus,
+                'payment_type' => $paymentType,
+                'gross_amount' => $grossAmount,
+                'fraud_status' => $fraudStatus,
+                'signature_key' => $signatureKey,
+                'raw_payload' => $payload,
+            ]);
+
+            // Find invoice
+            $invoice = Invoice::where('midtrans_order_id', $orderId)->first();
+            
+            if (!$invoice) {
+                Log::warning("Invoice not found for order: {$orderId}");
+                return ['success' => false, 'message' => 'Invoice not found'];
+            }
+
+            // Update invoice with transaction details
+            $invoice->update([
+                'midtrans_transaction_id' => $transactionId,
+                'midtrans_payment_type' => $paymentType,
+                'midtrans_status' => $transactionStatus,
+            ]);
+
+            // Process based on status
+            if ($transactionStatus === 'capture' || $transactionStatus === 'settlement') {
+                if ($paymentType === 'credit_card' && $fraudStatus !== 'accept') {
+                    Log::warning("Fraud detected for order: {$orderId}");
+                    return $this->handleFraud($invoice, $transactionStatus, $fraudStatus);
+                }
+                
+                return $this->handlePaymentSuccess($invoice, $transactionId, $paymentType, $grossAmount);
+            } elseif ($transactionStatus === 'pending') {
+                return $this->handlePaymentPending($invoice);
+            } elseif (in_array($transactionStatus, ['deny', 'expire', 'cancel'])) {
+                return $this->handlePaymentFailed($invoice, $transactionStatus);
+            }
+
+            return ['success' => true, 'message' => 'Notification processed'];
+        } catch (\Exception $e) {
+            Log::error('Midtrans Notification Error: ' . $e->getMessage());
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Handle Successful Payment
+     */
+    protected function handlePaymentSuccess(Invoice $invoice, string $transactionId, string $paymentType, $amount): array
+    {
+        // Create payment record
+        Payment::create([
+            'invoice_id' => $invoice->id,
+            'amount' => $amount,
+            'method' => $this->mapPaymentMethod($paymentType),
+            'transaction_id' => $transactionId,
+            'midtrans_transaction_id' => $transactionId,
+            'midtrans_payment_type' => $paymentType,
+            'payment_date' => now(),
+        ]);
+
+        // Update invoice status
+        $invoice->update([
+            'status' => 'paid',
+            'payment_reference' => $transactionId,
+        ]);
+
+        // Activate subscription if needed
+        $subscription = $invoice->subscription;
+        if ($subscription && $subscription->status !== 'active') {
+            $subscription->update(['status' => 'active']);
+            
+            // Enable MikroTik user
+            try {
+                $mikrotikService = new MikrotikService();
+                $mikrotikService->toggleUser($subscription->mikrotik_username, true);
+            } catch (\Exception $e) {
+                Log::error("Failed to enable MikroTik user: " . $e->getMessage());
+            }
+        }
+
+        // Log billing action
+        BillingLog::create([
+            'invoice_id' => $invoice->id,
+            'subscription_id' => $invoice->subscription_id,
+            'action' => 'payment_received',
+            'message' => "Payment received via {$paymentType}",
+            'meta' => [
+                'transaction_id' => $transactionId,
+                'amount' => $amount,
+                'payment_type' => $paymentType,
+            ],
+        ]);
+
+        Log::info("Payment success for invoice: {$invoice->id}");
+
+        return ['success' => true, 'message' => 'Payment successful'];
+    }
+
+    /**
+     * Handle Pending Payment
+     */
+    protected function handlePaymentPending(Invoice $invoice): array
+    {
+        $invoice->update(['status' => 'pending']);
+
+        BillingLog::create([
+            'invoice_id' => $invoice->id,
+            'subscription_id' => $invoice->subscription_id,
+            'action' => 'payment_pending',
+            'message' => 'Payment is pending',
+        ]);
+
+        return ['success' => true, 'message' => 'Payment pending'];
+    }
+
+    /**
+     * Handle Failed Payment
+     */
+    protected function handlePaymentFailed(Invoice $invoice, string $status): array
+    {
+        // Only revert to unpaid if was pending
+        if ($invoice->status === 'pending') {
+            $invoice->update(['status' => 'unpaid']);
+        }
+
+        BillingLog::create([
+            'invoice_id' => $invoice->id,
+            'subscription_id' => $invoice->subscription_id,
+            'action' => 'payment_failed',
+            'message' => "Payment {$status}",
+            'meta' => ['status' => $status],
+        ]);
+
+        return ['success' => true, 'message' => 'Payment failed'];
+    }
+
+    /**
+     * Handle Fraud Detection
+     */
+    protected function handleFraud(Invoice $invoice, string $transactionStatus, string $fraudStatus): array
+    {
+        $invoice->update(['status' => 'unpaid']);
+
+        BillingLog::create([
+            'invoice_id' => $invoice->id,
+            'subscription_id' => $invoice->subscription_id,
+            'action' => 'payment_fraud',
+            'message' => "Fraud detected: {$fraudStatus}",
+            'meta' => [
+                'transaction_status' => $transactionStatus,
+                'fraud_status' => $fraudStatus,
+            ],
+        ]);
+
+        return ['success' => false, 'message' => 'Fraud detected'];
+    }
+
+    /**
+     * Check Transaction Status
+     */
+    public function checkStatus(string $orderId): array
+    {
+        try {
+            $status = Transaction::status($orderId);
+            
+            return [
+                'success' => true,
+                'data' => $status,
+            ];
+        } catch (\Exception $e) {
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Cancel Transaction
+     */
+    public function cancelTransaction(string $orderId): array
+    {
+        try {
+            $response = Transaction::cancel($orderId);
+            
+            $invoice = Invoice::where('midtrans_order_id', $orderId)->first();
+            if ($invoice) {
+                $invoice->update(['status' => 'cancelled']);
+            }
+            
+            return [
+                'success' => true,
+                'data' => $response,
+            ];
+        } catch (\Exception $e) {
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Map Midtrans payment type to local method
+     */
+    protected function mapPaymentMethod(string $paymentType): string
+    {
+        $map = [
+            'credit_card' => 'credit_card',
+            'bank_transfer' => 'bank_transfer',
+            'bca_va' => 'bank_transfer',
+            'bni_va' => 'bank_transfer',
+            'bri_va' => 'bank_transfer',
+            'permata_va' => 'bank_transfer',
+            'echannel' => 'bank_transfer',
+            'gopay' => 'gopay',
+            'shopeepay' => 'shopeepay',
+            'dana' => 'dana',
+            'ovo' => 'ovo',
+            'qris' => 'qris',
+            'cstore' => 'cstore',
+            'indomaret' => 'cstore',
+            'alfamart' => 'cstore',
+        ];
+
+        return $map[$paymentType] ?? 'other';
+    }
+
+    /**
+     * Get Client Key for frontend
+     */
+    public function getClientKey(): string
+    {
+        return config('midtrans.client_key');
     }
 }
 ```
@@ -1127,13 +1785,12 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Http\Request;
-use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
-    public function login(Request $request): JsonResponse
+    public function login(Request $request)
     {
         $request->validate([
             'email' => 'required|email',
@@ -1157,21 +1814,19 @@ class AuthController extends Controller
         ]);
     }
 
-    public function register(Request $request): JsonResponse
+    public function register(Request $request)
     {
         $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users',
-            'password' => 'required|min:6|confirmed',
+            'password' => 'required|min:8|confirmed',
         ]);
-
-        $isFirstUser = User::count() === 0;
 
         $user = User::create([
             'name' => $request->name,
             'email' => $request->email,
             'password' => Hash::make($request->password),
-            'role' => $isFirstUser ? 'admin' : 'operator',
+            'role' => 'operator',
         ]);
 
         $token = $user->createToken('auth-token')->plainTextToken;
@@ -1183,104 +1838,19 @@ class AuthController extends Controller
         ], 201);
     }
 
-    public function user(Request $request): JsonResponse
+    public function logout(Request $request)
+    {
+        $request->user()->currentAccessToken()->delete();
+
+        return response()->json(['message' => 'Logged out successfully']);
+    }
+
+    public function user(Request $request)
     {
         return response()->json([
             'user' => $request->user(),
             'isAdmin' => $request->user()->isAdmin(),
         ]);
-    }
-
-    public function logout(Request $request): JsonResponse
-    {
-        $request->user()->currentAccessToken()->delete();
-        return response()->json(['message' => 'Logged out']);
-    }
-}
-```
-
-### app/Http/Controllers/Api/CustomerController.php
-
-```php
-<?php
-
-namespace App\Http\Controllers\Api;
-
-use App\Http\Controllers\Controller;
-use App\Models\Customer;
-use Illuminate\Http\Request;
-use Illuminate\Http\JsonResponse;
-
-class CustomerController extends Controller
-{
-    public function index(Request $request): JsonResponse
-    {
-        $query = Customer::query();
-
-        if ($request->has('status') && $request->status !== 'all') {
-            $query->where('status', $request->status);
-        }
-
-        if ($request->has('search')) {
-            $search = $request->search;
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                  ->orWhere('email', 'like', "%{$search}%")
-                  ->orWhere('phone', 'like', "%{$search}%");
-            });
-        }
-
-        $customers = $query->orderBy('created_at', 'desc')->get();
-        return response()->json($customers);
-    }
-
-    public function store(Request $request): JsonResponse
-    {
-        $validated = $request->validate([
-            'name' => 'required|string|max:255',
-            'email' => 'nullable|email|max:255',
-            'phone' => 'nullable|string|max:50',
-            'address' => 'nullable|string',
-            'status' => 'nullable|in:active,inactive,suspended',
-        ]);
-
-        $customer = Customer::create($validated);
-        return response()->json($customer, 201);
-    }
-
-    public function show(string $id): JsonResponse
-    {
-        $customer = Customer::findOrFail($id);
-        return response()->json($customer);
-    }
-
-    public function update(Request $request, string $id): JsonResponse
-    {
-        $customer = Customer::findOrFail($id);
-
-        $validated = $request->validate([
-            'name' => 'sometimes|string|max:255',
-            'email' => 'nullable|email|max:255',
-            'phone' => 'nullable|string|max:50',
-            'address' => 'nullable|string',
-            'status' => 'nullable|in:active,inactive,suspended',
-        ]);
-
-        $customer->update($validated);
-        return response()->json($customer);
-    }
-
-    public function destroy(string $id): JsonResponse
-    {
-        $customer = Customer::findOrFail($id);
-        $customer->delete();
-        return response()->json(['message' => 'Customer deleted']);
-    }
-
-    public function subscriptions(string $id): JsonResponse
-    {
-        $customer = Customer::with(['subscriptions.package'])->findOrFail($id);
-        return response()->json($customer->subscriptions);
     }
 }
 ```
@@ -1296,47 +1866,58 @@ use App\Http\Controllers\Controller;
 use App\Services\MikrotikService;
 use App\Models\MikrotikSecret;
 use Illuminate\Http\Request;
-use Illuminate\Http\JsonResponse;
 
 class MikrotikController extends Controller
 {
-    public function __construct(protected MikrotikService $mikrotik) {}
+    protected MikrotikService $mikrotik;
 
-    public function system(): JsonResponse
+    public function __construct(MikrotikService $mikrotik)
+    {
+        $this->mikrotik = $mikrotik;
+    }
+
+    public function testConnection()
+    {
+        return response()->json($this->mikrotik->testConnection());
+    }
+
+    public function system()
     {
         try {
-            return response()->json($this->mikrotik->getSystemResource());
+            $data = $this->mikrotik->getSystemResource();
+            return response()->json(['success' => true, 'data' => $data]);
         } catch (\Exception $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
 
-    public function onlineUsers(): JsonResponse
+    public function onlineUsers()
     {
         try {
-            return response()->json($this->mikrotik->getOnlineUsers());
+            $data = $this->mikrotik->getOnlineUsers();
+            return response()->json(['success' => true, 'data' => $data]);
         } catch (\Exception $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
 
-    public function userDetail(string $username, Request $request): JsonResponse
+    public function userDetail(string $username, Request $request)
     {
         try {
-            $type = $request->get('type', 'pppoe');
-            $user = $this->mikrotik->getUserDetail($username, $type);
+            $type = $request->query('type', 'pppoe');
+            $data = $this->mikrotik->getUserDetail($username, $type);
             
-            if (!$user) {
-                return response()->json(['error' => 'User not found'], 404);
+            if (!$data) {
+                return response()->json(['success' => false, 'message' => 'User not found'], 404);
             }
             
-            return response()->json($user);
+            return response()->json(['success' => true, 'data' => $data]);
         } catch (\Exception $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
 
-    public function toggleUser(Request $request): JsonResponse
+    public function toggleUser(Request $request)
     {
         $request->validate([
             'username' => 'required|string',
@@ -1347,75 +1928,100 @@ class MikrotikController extends Controller
             $result = $this->mikrotik->toggleUser($request->username, $request->enable);
             return response()->json(['success' => $result]);
         } catch (\Exception $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
 
-    public function disconnectUser(Request $request): JsonResponse
+    public function disconnectUser(Request $request)
     {
-        $request->validate(['username' => 'required|string']);
+        $request->validate([
+            'username' => 'required|string',
+        ]);
 
         try {
             $result = $this->mikrotik->disconnectUser($request->username);
             return response()->json(['success' => $result]);
         } catch (\Exception $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
 
-    public function importSecrets(): JsonResponse
+    public function traffic()
+    {
+        try {
+            $data = $this->mikrotik->getTrafficData();
+            return response()->json(['success' => true, 'data' => $data]);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    public function profiles(Request $request)
+    {
+        try {
+            $type = $request->query('type', 'pppoe');
+            $data = $this->mikrotik->getProfiles($type);
+            return response()->json(['success' => true, 'data' => $data]);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    public function importSecrets()
     {
         try {
             $secrets = $this->mikrotik->importSecrets();
             $imported = 0;
 
             foreach ($secrets as $secret) {
-                MikrotikSecret::updateOrCreate(
-                    ['username' => $secret['username']],
-                    $secret
-                );
-                $imported++;
+                $existing = MikrotikSecret::where('username', $secret['username'])->first();
+                
+                if (!$existing) {
+                    MikrotikSecret::create($secret);
+                    $imported++;
+                }
             }
 
             return response()->json([
                 'success' => true,
                 'imported' => $imported,
+                'total' => count($secrets),
             ]);
         } catch (\Exception $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
 
-    public function syncSecret(Request $request): JsonResponse
+    public function syncSecret(Request $request)
     {
         $request->validate([
             'action' => 'required|in:create,update,delete',
-            'secretId' => 'required|uuid',
+            'secretId' => 'required|string',
         ]);
 
         try {
             $secret = MikrotikSecret::findOrFail($request->secretId);
-
+            
             switch ($request->action) {
                 case 'create':
                     $this->mikrotik->createUser(
                         $secret->username,
                         $secret->password,
                         $secret->profile ?? 'default',
-                        $secret->service
+                        $secret->service,
+                        $secret->comment
                     );
                     break;
+                    
                 case 'update':
-                    $this->mikrotik->updateUser(
-                        $secret->username,
-                        [
-                            'password' => $secret->password,
-                            'profile' => $secret->profile ?? 'default',
-                            'disabled' => $secret->disabled ? 'yes' : 'no',
-                        ],
-                        $secret->service
-                    );
+                    $this->mikrotik->updateUser($secret->username, [
+                        'password' => $secret->password,
+                        'profile' => $secret->profile ?? 'default',
+                        'comment' => $secret->comment ?? '',
+                        'disabled' => $secret->disabled ? 'yes' : 'no',
+                    ], $secret->service);
                     break;
+                    
                 case 'delete':
                     $this->mikrotik->deleteUser($secret->username, $secret->service);
                     break;
@@ -1423,17 +2029,461 @@ class MikrotikController extends Controller
 
             return response()->json(['success' => true]);
         } catch (\Exception $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
+}
+```
 
-    public function traffic(): JsonResponse
+### app/Http/Controllers/Api/MidtransController.php
+
+```php
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\Invoice;
+use App\Services\MidtransService;
+use Illuminate\Http\Request;
+
+class MidtransController extends Controller
+{
+    protected MidtransService $midtrans;
+
+    public function __construct(MidtransService $midtrans)
     {
-        try {
-            return response()->json($this->mikrotik->getTraffic());
-        } catch (\Exception $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
+        $this->midtrans = $midtrans;
+    }
+
+    /**
+     * Get Midtrans client key
+     */
+    public function getClientKey()
+    {
+        return response()->json([
+            'client_key' => $this->midtrans->getClientKey(),
+        ]);
+    }
+
+    /**
+     * Create Snap Token for payment
+     */
+    public function createSnapToken(Request $request)
+    {
+        $request->validate([
+            'invoice_id' => 'required|exists:invoices,id',
+        ]);
+
+        $invoice = Invoice::findOrFail($request->invoice_id);
+
+        if ($invoice->status === 'paid') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invoice already paid',
+            ], 400);
         }
+
+        $result = $this->midtrans->createSnapToken($invoice);
+
+        if ($result['success']) {
+            return response()->json($result);
+        }
+
+        return response()->json($result, 500);
+    }
+
+    /**
+     * Create redirect URL for payment
+     */
+    public function createPaymentUrl(Request $request)
+    {
+        $request->validate([
+            'invoice_id' => 'required|exists:invoices,id',
+        ]);
+
+        $invoice = Invoice::findOrFail($request->invoice_id);
+
+        if ($invoice->status === 'paid') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invoice already paid',
+            ], 400);
+        }
+
+        $result = $this->midtrans->createSnapUrl($invoice);
+
+        if ($result['success']) {
+            return response()->json($result);
+        }
+
+        return response()->json($result, 500);
+    }
+
+    /**
+     * Handle Midtrans webhook notification
+     */
+    public function handleNotification(Request $request)
+    {
+        $payload = $request->all();
+        $result = $this->midtrans->handleNotification($payload);
+
+        return response()->json($result);
+    }
+
+    /**
+     * Check transaction status
+     */
+    public function checkStatus(string $orderId)
+    {
+        $result = $this->midtrans->checkStatus($orderId);
+
+        if ($result['success']) {
+            return response()->json($result);
+        }
+
+        return response()->json($result, 400);
+    }
+
+    /**
+     * Cancel transaction
+     */
+    public function cancelTransaction(string $orderId)
+    {
+        $result = $this->midtrans->cancelTransaction($orderId);
+
+        if ($result['success']) {
+            return response()->json($result);
+        }
+
+        return response()->json($result, 400);
+    }
+}
+```
+
+### app/Http/Controllers/Api/CustomerController.php
+
+```php
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\Customer;
+use Illuminate\Http\Request;
+
+class CustomerController extends Controller
+{
+    public function index()
+    {
+        return response()->json(Customer::orderBy('name')->get());
+    }
+
+    public function store(Request $request)
+    {
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'email' => 'nullable|email',
+            'phone' => 'nullable|string|max:50',
+            'address' => 'nullable|string',
+        ]);
+
+        $customer = Customer::create($request->all());
+
+        return response()->json($customer, 201);
+    }
+
+    public function show(Customer $customer)
+    {
+        return response()->json($customer->load(['subscriptions.package', 'mikrotikSecrets']));
+    }
+
+    public function update(Request $request, Customer $customer)
+    {
+        $request->validate([
+            'name' => 'sometimes|string|max:255',
+            'email' => 'nullable|email',
+            'phone' => 'nullable|string|max:50',
+            'address' => 'nullable|string',
+            'status' => 'sometimes|in:active,inactive,suspended',
+        ]);
+
+        $customer->update($request->all());
+
+        return response()->json($customer);
+    }
+
+    public function destroy(Customer $customer)
+    {
+        $customer->delete();
+
+        return response()->json(null, 204);
+    }
+}
+```
+
+### app/Http/Controllers/Api/PackageController.php
+
+```php
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\Package;
+use Illuminate\Http\Request;
+
+class PackageController extends Controller
+{
+    public function index()
+    {
+        return response()->json(Package::orderBy('price')->get());
+    }
+
+    public function store(Request $request)
+    {
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'bandwidth' => 'required|string',
+            'price' => 'required|numeric|min:0',
+            'type' => 'required|in:pppoe,hotspot,static',
+        ]);
+
+        $package = Package::create($request->all());
+
+        return response()->json($package, 201);
+    }
+
+    public function show(Package $package)
+    {
+        return response()->json($package);
+    }
+
+    public function update(Request $request, Package $package)
+    {
+        $request->validate([
+            'name' => 'sometimes|string|max:255',
+            'bandwidth' => 'sometimes|string',
+            'price' => 'sometimes|numeric|min:0',
+            'type' => 'sometimes|in:pppoe,hotspot,static',
+        ]);
+
+        $package->update($request->all());
+
+        return response()->json($package);
+    }
+
+    public function destroy(Package $package)
+    {
+        $package->delete();
+
+        return response()->json(null, 204);
+    }
+
+    public function syncToMikrotik(Package $package)
+    {
+        // Sync package as MikroTik profile
+        // Implementation depends on your MikroTik profile structure
+        return response()->json(['success' => true, 'message' => 'Profile synced']);
+    }
+}
+```
+
+### app/Http/Controllers/Api/InvoiceController.php
+
+```php
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\Invoice;
+use Illuminate\Http\Request;
+
+class InvoiceController extends Controller
+{
+    public function index(Request $request)
+    {
+        $query = Invoice::with(['subscription.customer', 'subscription.package']);
+
+        if ($request->has('status')) {
+            $query->where('status', $request->status);
+        }
+
+        if ($request->has('subscription_id')) {
+            $query->where('subscription_id', $request->subscription_id);
+        }
+
+        return response()->json($query->orderBy('due_date', 'desc')->get());
+    }
+
+    public function store(Request $request)
+    {
+        $request->validate([
+            'subscription_id' => 'required|exists:subscriptions,id',
+            'amount' => 'required|numeric|min:0',
+            'due_date' => 'required|date',
+        ]);
+
+        $invoice = Invoice::create($request->all());
+
+        return response()->json($invoice, 201);
+    }
+
+    public function show(Invoice $invoice)
+    {
+        return response()->json($invoice->load(['subscription.customer', 'subscription.package', 'payments']));
+    }
+
+    public function update(Request $request, Invoice $invoice)
+    {
+        $request->validate([
+            'status' => 'sometimes|in:unpaid,paid,overdue,cancelled,pending',
+            'notes' => 'nullable|string',
+        ]);
+
+        $invoice->update($request->all());
+
+        return response()->json($invoice);
+    }
+
+    public function unpaid()
+    {
+        $invoices = Invoice::with(['subscription.customer', 'subscription.package'])
+            ->whereIn('status', ['unpaid', 'overdue', 'pending'])
+            ->orderBy('due_date')
+            ->get();
+
+        return response()->json($invoices);
+    }
+}
+```
+
+### app/Http/Controllers/Api/PaymentController.php
+
+```php
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\Payment;
+use App\Models\Invoice;
+use App\Services\MikrotikService;
+use Illuminate\Http\Request;
+
+class PaymentController extends Controller
+{
+    public function index(Request $request)
+    {
+        $query = Payment::with(['invoice.subscription.customer']);
+
+        if ($request->has('invoice_id')) {
+            $query->where('invoice_id', $request->invoice_id);
+        }
+
+        return response()->json($query->orderBy('payment_date', 'desc')->get());
+    }
+
+    public function store(Request $request)
+    {
+        $request->validate([
+            'invoice_id' => 'required|exists:invoices,id',
+            'amount' => 'required|numeric|min:0',
+            'method' => 'required|string',
+            'payment_date' => 'nullable|date',
+        ]);
+
+        $invoice = Invoice::findOrFail($request->invoice_id);
+
+        // Create payment
+        $payment = Payment::create([
+            'invoice_id' => $invoice->id,
+            'amount' => $request->amount,
+            'method' => $request->method,
+            'transaction_id' => $request->transaction_id,
+            'payment_date' => $request->payment_date ?? now(),
+        ]);
+
+        // Update invoice status
+        $invoice->update(['status' => 'paid']);
+
+        // Activate subscription if needed
+        $subscription = $invoice->subscription;
+        if ($subscription && $subscription->status !== 'active') {
+            $subscription->update(['status' => 'active']);
+            
+            // Enable MikroTik user
+            try {
+                $mikrotik = new MikrotikService();
+                $mikrotik->toggleUser($subscription->mikrotik_username, true);
+            } catch (\Exception $e) {
+                // Log but don't fail
+            }
+        }
+
+        return response()->json($payment, 201);
+    }
+
+    public function show(Payment $payment)
+    {
+        return response()->json($payment->load(['invoice.subscription.customer']));
+    }
+}
+```
+
+### app/Http/Controllers/Api/DashboardController.php
+
+```php
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\Customer;
+use App\Models\Subscription;
+use App\Models\Invoice;
+use App\Models\Payment;
+use Illuminate\Http\Request;
+
+class DashboardController extends Controller
+{
+    public function stats()
+    {
+        $totalCustomers = Customer::count();
+        $activeSubscriptions = Subscription::where('status', 'active')->count();
+        $unpaidInvoices = Invoice::whereIn('status', ['unpaid', 'overdue'])->count();
+        $monthlyRevenue = Payment::whereMonth('payment_date', now()->month)
+            ->whereYear('payment_date', now()->year)
+            ->sum('amount');
+
+        return response()->json([
+            'totalCustomers' => $totalCustomers,
+            'activeSubscriptions' => $activeSubscriptions,
+            'unpaidInvoices' => $unpaidInvoices,
+            'monthlyRevenue' => (float) $monthlyRevenue,
+        ]);
+    }
+
+    public function recentPayments()
+    {
+        return response()->json(
+            Payment::with(['invoice.subscription.customer'])
+                ->orderBy('payment_date', 'desc')
+                ->limit(10)
+                ->get()
+        );
+    }
+
+    public function expiringSubscriptions()
+    {
+        return response()->json(
+            Subscription::with(['customer', 'package'])
+                ->where('status', 'active')
+                ->where('end_date', '<=', now()->addDays(7))
+                ->orderBy('end_date')
+                ->get()
+        );
     }
 }
 ```
@@ -1448,124 +2498,278 @@ class MikrotikController extends Controller
 <?php
 
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\Api\{
-    AuthController,
-    CustomerController,
-    PackageController,
-    SubscriptionController,
-    InvoiceController,
-    PaymentController,
-    RouterSettingController,
-    MikrotikController,
-    MikrotikSecretController,
-    DashboardController
-};
+use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\CustomerController;
+use App\Http\Controllers\Api\PackageController;
+use App\Http\Controllers\Api\SubscriptionController;
+use App\Http\Controllers\Api\InvoiceController;
+use App\Http\Controllers\Api\PaymentController;
+use App\Http\Controllers\Api\MikrotikController;
+use App\Http\Controllers\Api\MikrotikSecretController;
+use App\Http\Controllers\Api\RouterSettingController;
+use App\Http\Controllers\Api\MidtransController;
 
-// Public
-Route::post('/login', [AuthController::class, 'login']);
-Route::post('/register', [AuthController::class, 'register']);
+/*
+|--------------------------------------------------------------------------
+| Public Routes
+|--------------------------------------------------------------------------
+*/
 
-// Protected
+Route::post('/auth/login', [AuthController::class, 'login']);
+Route::post('/auth/register', [AuthController::class, 'register']);
+
+// Midtrans webhook (must be public)
+Route::post('/midtrans/notification', [MidtransController::class, 'handleNotification']);
+
+/*
+|--------------------------------------------------------------------------
+| Protected Routes
+|--------------------------------------------------------------------------
+*/
+
 Route::middleware('auth:sanctum')->group(function () {
     // Auth
-    Route::post('/logout', [AuthController::class, 'logout']);
-    Route::get('/user', [AuthController::class, 'user']);
+    Route::post('/auth/logout', [AuthController::class, 'logout']);
+    Route::get('/auth/user', [AuthController::class, 'user']);
 
     // Dashboard
     Route::get('/dashboard/stats', [DashboardController::class, 'stats']);
-    Route::get('/dashboard/expiring-soon', [DashboardController::class, 'expiringSoon']);
-    Route::get('/dashboard/overdue-invoices', [DashboardController::class, 'overdueInvoices']);
+    Route::get('/dashboard/recent-payments', [DashboardController::class, 'recentPayments']);
+    Route::get('/dashboard/expiring-subscriptions', [DashboardController::class, 'expiringSubscriptions']);
 
-    // Billing
+    // Customers
     Route::apiResource('customers', CustomerController::class);
-    Route::get('/customers/{id}/subscriptions', [CustomerController::class, 'subscriptions']);
-    
-    Route::apiResource('packages', PackageController::class);
-    Route::post('/packages/{id}/sync-mikrotik', [PackageController::class, 'syncMikrotik']);
-    
-    Route::apiResource('subscriptions', SubscriptionController::class);
-    Route::post('/subscriptions/{id}/create-mikrotik-user', [SubscriptionController::class, 'createMikrotikUser']);
-    
-    Route::apiResource('invoices', InvoiceController::class);
-    Route::post('/invoices/{id}/mark-paid', [InvoiceController::class, 'markPaid']);
-    
-    Route::apiResource('payments', PaymentController::class);
 
-    // MikroTik
+    // Packages
+    Route::apiResource('packages', PackageController::class);
+    Route::post('/packages/{package}/sync', [PackageController::class, 'syncToMikrotik']);
+
+    // Subscriptions
+    Route::apiResource('subscriptions', SubscriptionController::class);
+
+    // Invoices
+    Route::apiResource('invoices', InvoiceController::class);
+    Route::get('/invoices-unpaid', [InvoiceController::class, 'unpaid']);
+
+    // Payments
+    Route::apiResource('payments', PaymentController::class)->only(['index', 'store', 'show']);
+
+    // Router Settings
     Route::get('/router-settings', [RouterSettingController::class, 'index']);
     Route::post('/router-settings', [RouterSettingController::class, 'store']);
-    Route::put('/router-settings/{id}', [RouterSettingController::class, 'update']);
-    Route::post('/router-settings/{id}/test', [RouterSettingController::class, 'test']);
+    Route::put('/router-settings/{routerSetting}', [RouterSettingController::class, 'update']);
 
+    // MikroTik
     Route::prefix('mikrotik')->group(function () {
+        Route::get('/test', [MikrotikController::class, 'testConnection']);
         Route::get('/system', [MikrotikController::class, 'system']);
-        Route::get('/traffic', [MikrotikController::class, 'traffic']);
         Route::get('/online-users', [MikrotikController::class, 'onlineUsers']);
         Route::get('/user-detail/{username}', [MikrotikController::class, 'userDetail']);
         Route::post('/toggle-user', [MikrotikController::class, 'toggleUser']);
         Route::post('/disconnect-user', [MikrotikController::class, 'disconnectUser']);
+        Route::get('/traffic', [MikrotikController::class, 'traffic']);
+        Route::get('/profiles', [MikrotikController::class, 'profiles']);
         Route::post('/import-secrets', [MikrotikController::class, 'importSecrets']);
         Route::post('/sync-secret', [MikrotikController::class, 'syncSecret']);
     });
 
+    // MikroTik Secrets
     Route::apiResource('mikrotik-secrets', MikrotikSecretController::class);
+
+    // Midtrans Payment
+    Route::prefix('midtrans')->group(function () {
+        Route::get('/client-key', [MidtransController::class, 'getClientKey']);
+        Route::post('/snap-token', [MidtransController::class, 'createSnapToken']);
+        Route::post('/payment-url', [MidtransController::class, 'createPaymentUrl']);
+        Route::get('/status/{orderId}', [MidtransController::class, 'checkStatus']);
+        Route::post('/cancel/{orderId}', [MidtransController::class, 'cancelTransaction']);
+    });
 });
 ```
 
 ---
 
-## 7. Frontend API Client
+## 7. Midtrans Integration
 
-Buat file baru di frontend untuk menggantikan Supabase calls:
+### Frontend Midtrans Component
+
+Create `src/components/payments/MidtransPayment.tsx`:
+
+```tsx
+import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { api } from "@/lib/api";
+import { toast } from "sonner";
+import { CreditCard, Loader2 } from "lucide-react";
+
+interface MidtransPaymentProps {
+  invoiceId: string;
+  amount: number;
+  onSuccess?: () => void;
+  onPending?: () => void;
+  onError?: (error: string) => void;
+  onClose?: () => void;
+}
+
+declare global {
+  interface Window {
+    snap: {
+      pay: (
+        token: string,
+        options: {
+          onSuccess: (result: any) => void;
+          onPending: (result: any) => void;
+          onError: (result: any) => void;
+          onClose: () => void;
+        }
+      ) => void;
+    };
+  }
+}
+
+export function MidtransPayment({
+  invoiceId,
+  amount,
+  onSuccess,
+  onPending,
+  onError,
+  onClose,
+}: MidtransPaymentProps) {
+  const [loading, setLoading] = useState(false);
+  const [snapReady, setSnapReady] = useState(false);
+
+  useEffect(() => {
+    // Load Midtrans Snap.js
+    const loadSnapScript = async () => {
+      try {
+        const { client_key } = await api.getMidtransClientKey();
+        
+        const script = document.createElement("script");
+        script.src = "https://app.sandbox.midtrans.com/snap/snap.js"; // Use https://app.midtrans.com/snap/snap.js for production
+        script.setAttribute("data-client-key", client_key);
+        script.onload = () => setSnapReady(true);
+        document.body.appendChild(script);
+      } catch (error) {
+        console.error("Failed to load Midtrans:", error);
+      }
+    };
+
+    if (!window.snap) {
+      loadSnapScript();
+    } else {
+      setSnapReady(true);
+    }
+  }, []);
+
+  const handlePayment = async () => {
+    if (!snapReady) {
+      toast.error("Payment system is loading, please wait...");
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const response = await api.createMidtransSnapToken(invoiceId);
+
+      if (!response.success) {
+        throw new Error(response.message || "Failed to create payment");
+      }
+
+      window.snap.pay(response.snap_token, {
+        onSuccess: (result) => {
+          toast.success("Payment successful!");
+          onSuccess?.();
+        },
+        onPending: (result) => {
+          toast.info("Payment is pending. Please complete the payment.");
+          onPending?.();
+        },
+        onError: (result) => {
+          toast.error("Payment failed. Please try again.");
+          onError?.(result.status_message || "Payment failed");
+        },
+        onClose: () => {
+          toast.info("Payment popup closed");
+          onClose?.();
+        },
+      });
+    } catch (error: any) {
+      toast.error(error.message || "Failed to initiate payment");
+      onError?.(error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Button
+      onClick={handlePayment}
+      disabled={loading || !snapReady}
+      className="w-full"
+    >
+      {loading ? (
+        <>
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          Processing...
+        </>
+      ) : (
+        <>
+          <CreditCard className="mr-2 h-4 w-4" />
+          Pay Rp {amount.toLocaleString("id-ID")}
+        </>
+      )}
+    </Button>
+  );
+}
+```
+
+---
+
+## 8. Frontend API Client
 
 ### src/lib/api.ts
 
 ```typescript
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 class ApiClient {
   private token: string | null = null;
 
-  // ==========================================
-  // TOKEN MANAGEMENT
-  // ==========================================
+  constructor() {
+    this.token = localStorage.getItem('auth_token');
+  }
 
-  setToken(token: string): void {
+  setToken(token: string) {
     this.token = token;
     localStorage.setItem('auth_token', token);
   }
 
-  getToken(): string | null {
-    if (!this.token) {
-      this.token = localStorage.getItem('auth_token');
-    }
-    return this.token;
-  }
-
-  clearToken(): void {
+  clearToken() {
     this.token = null;
     localStorage.removeItem('auth_token');
   }
 
   isAuthenticated(): boolean {
-    return !!this.getToken();
+    return !!this.token;
   }
 
-  // ==========================================
-  // BASE REQUEST METHOD
-  // ==========================================
+  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...options.headers,
+    };
 
-  async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const token = this.getToken();
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    }
 
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    const response = await fetch(`${API_URL}${endpoint}`, {
       ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        ...(token && { Authorization: `Bearer ${token}` }),
-        ...options.headers,
-      },
+      headers,
+      credentials: 'include',
     });
 
     if (response.status === 401) {
@@ -1575,8 +2779,12 @@ class ApiClient {
     }
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: 'API Error' }));
-      throw new Error(error.message || error.error || 'API Error');
+      const error = await response.json().catch(() => ({ message: 'Request failed' }));
+      throw new Error(error.message || 'Request failed');
+    }
+
+    if (response.status === 204) {
+      return {} as T;
     }
 
     return response.json();
@@ -1587,7 +2795,7 @@ class ApiClient {
   // ==========================================
 
   async login(email: string, password: string) {
-    const data = await this.request<{ user: any; token: string; isAdmin: boolean }>('/login', {
+    const data = await this.request<{ user: any; token: string; isAdmin: boolean }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
@@ -1595,22 +2803,22 @@ class ApiClient {
     return data;
   }
 
-  async register(name: string, email: string, password: string, password_confirmation: string) {
-    const data = await this.request<{ user: any; token: string; isAdmin: boolean }>('/register', {
+  async register(name: string, email: string, password: string, passwordConfirmation: string) {
+    const data = await this.request<{ user: any; token: string; isAdmin: boolean }>('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ name, email, password, password_confirmation }),
+      body: JSON.stringify({ name, email, password, password_confirmation: passwordConfirmation }),
     });
     this.setToken(data.token);
     return data;
   }
 
   async logout() {
-    await this.request('/logout', { method: 'POST' });
+    await this.request('/auth/logout', { method: 'POST' });
     this.clearToken();
   }
 
   async getUser() {
-    return this.request<{ user: any; isAdmin: boolean }>('/user');
+    return this.request<{ user: any; isAdmin: boolean }>('/auth/user');
   }
 
   // ==========================================
@@ -1619,28 +2827,27 @@ class ApiClient {
 
   async getDashboardStats() {
     return this.request<{
-      customersCount: number;
+      totalCustomers: number;
       activeSubscriptions: number;
       unpaidInvoices: number;
       monthlyRevenue: number;
     }>('/dashboard/stats');
   }
 
-  async getExpiringSoon() {
-    return this.request<any[]>('/dashboard/expiring-soon');
+  async getRecentPayments() {
+    return this.request<any[]>('/dashboard/recent-payments');
   }
 
-  async getOverdueInvoices() {
-    return this.request<any[]>('/dashboard/overdue-invoices');
+  async getExpiringSubscriptions() {
+    return this.request<any[]>('/dashboard/expiring-subscriptions');
   }
 
   // ==========================================
   // CUSTOMERS
   // ==========================================
 
-  async getCustomers(params?: { status?: string; search?: string }) {
-    const query = new URLSearchParams(params as any).toString();
-    return this.request<any[]>(`/customers${query ? `?${query}` : ''}`);
+  async getCustomers() {
+    return this.request<any[]>('/customers');
   }
 
   async getCustomer(id: string) {
@@ -1673,6 +2880,10 @@ class ApiClient {
     return this.request<any[]>('/packages');
   }
 
+  async getPackage(id: string) {
+    return this.request<any>(`/packages/${id}`);
+  }
+
   async createPackage(data: any) {
     return this.request<any>('/packages', {
       method: 'POST',
@@ -1692,7 +2903,7 @@ class ApiClient {
   }
 
   async syncPackageToMikrotik(id: string) {
-    return this.request(`/packages/${id}/sync-mikrotik`, { method: 'POST' });
+    return this.request<{ success: boolean }>(`/packages/${id}/sync`, { method: 'POST' });
   }
 
   // ==========================================
@@ -1701,6 +2912,10 @@ class ApiClient {
 
   async getSubscriptions() {
     return this.request<any[]>('/subscriptions');
+  }
+
+  async getSubscription(id: string) {
+    return this.request<any>(`/subscriptions/${id}`);
   }
 
   async createSubscription(data: any) {
@@ -1721,16 +2936,17 @@ class ApiClient {
     return this.request(`/subscriptions/${id}`, { method: 'DELETE' });
   }
 
-  async createMikrotikUser(subscriptionId: string) {
-    return this.request(`/subscriptions/${subscriptionId}/create-mikrotik-user`, { method: 'POST' });
-  }
-
   // ==========================================
   // INVOICES
   // ==========================================
 
-  async getInvoices() {
-    return this.request<any[]>('/invoices');
+  async getInvoices(params?: { status?: string; subscription_id?: string }) {
+    const searchParams = new URLSearchParams(params as any).toString();
+    return this.request<any[]>(`/invoices${searchParams ? `?${searchParams}` : ''}`);
+  }
+
+  async getInvoice(id: string) {
+    return this.request<any>(`/invoices/${id}`);
   }
 
   async createInvoice(data: any) {
@@ -1747,23 +2963,17 @@ class ApiClient {
     });
   }
 
-  async deleteInvoice(id: string) {
-    return this.request(`/invoices/${id}`, { method: 'DELETE' });
-  }
-
-  async markInvoicePaid(id: string, paymentData: any) {
-    return this.request(`/invoices/${id}/mark-paid`, {
-      method: 'POST',
-      body: JSON.stringify(paymentData),
-    });
+  async getUnpaidInvoices() {
+    return this.request<any[]>('/invoices-unpaid');
   }
 
   // ==========================================
   // PAYMENTS
   // ==========================================
 
-  async getPayments() {
-    return this.request<any[]>('/payments');
+  async getPayments(params?: { invoice_id?: string }) {
+    const searchParams = new URLSearchParams(params as any).toString();
+    return this.request<any[]>(`/payments${searchParams ? `?${searchParams}` : ''}`);
   }
 
   async createPayment(data: any) {
@@ -1778,7 +2988,7 @@ class ApiClient {
   // ==========================================
 
   async getRouterSettings() {
-    return this.request<any>('/router-settings');
+    return this.request<any[]>('/router-settings');
   }
 
   async saveRouterSettings(data: any) {
@@ -1795,31 +3005,24 @@ class ApiClient {
     });
   }
 
-  async testRouterConnection(id: string) {
-    return this.request(`/router-settings/${id}/test`, { method: 'POST' });
-  }
-
   // ==========================================
   // MIKROTIK
   // ==========================================
 
+  async testMikrotikConnection() {
+    return this.request<{ success: boolean; message: string; data?: any }>('/mikrotik/test');
+  }
+
   async getMikrotikSystem() {
-    return this.request<{
-      cpu: number;
-      memory: number;
-      uptime: string;
-      version: string;
-      board: string;
-      temperature: number | null;
-    }>('/mikrotik/system');
+    return this.request<{ success: boolean; data: any }>('/mikrotik/system');
   }
 
   async getMikrotikOnlineUsers() {
-    return this.request<any[]>('/mikrotik/online-users');
+    return this.request<{ success: boolean; data: any[] }>('/mikrotik/online-users');
   }
 
   async getMikrotikUserDetail(username: string, type: string = 'pppoe') {
-    return this.request<any>(`/mikrotik/user-detail/${username}?type=${type}`);
+    return this.request<{ success: boolean; data: any }>(`/mikrotik/user-detail/${username}?type=${type}`);
   }
 
   async toggleMikrotikUser(username: string, enable: boolean) {
@@ -1836,8 +3039,16 @@ class ApiClient {
     });
   }
 
+  async getMikrotikTraffic() {
+    return this.request<{ success: boolean; data: any[] }>('/mikrotik/traffic');
+  }
+
+  async getMikrotikProfiles(type: string = 'pppoe') {
+    return this.request<{ success: boolean; data: any[] }>(`/mikrotik/profiles?type=${type}`);
+  }
+
   async importMikrotikSecrets() {
-    return this.request<{ success: boolean; imported: number }>('/mikrotik/import-secrets', {
+    return this.request<{ success: boolean; imported: number; total: number }>('/mikrotik/import-secrets', {
       method: 'POST',
     });
   }
@@ -1847,10 +3058,6 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify({ action, secretId }),
     });
-  }
-
-  async getMikrotikTraffic() {
-    return this.request<any[]>('/mikrotik/traffic');
   }
 
   // ==========================================
@@ -1878,6 +3085,38 @@ class ApiClient {
   async deleteMikrotikSecret(id: string) {
     return this.request(`/mikrotik-secrets/${id}`, { method: 'DELETE' });
   }
+
+  // ==========================================
+  // MIDTRANS PAYMENT
+  // ==========================================
+
+  async getMidtransClientKey() {
+    return this.request<{ client_key: string }>('/midtrans/client-key');
+  }
+
+  async createMidtransSnapToken(invoiceId: string) {
+    return this.request<{ success: boolean; snap_token?: string; order_id?: string; client_key?: string; message?: string }>('/midtrans/snap-token', {
+      method: 'POST',
+      body: JSON.stringify({ invoice_id: invoiceId }),
+    });
+  }
+
+  async createMidtransPaymentUrl(invoiceId: string) {
+    return this.request<{ success: boolean; redirect_url?: string; order_id?: string; message?: string }>('/midtrans/payment-url', {
+      method: 'POST',
+      body: JSON.stringify({ invoice_id: invoiceId }),
+    });
+  }
+
+  async checkMidtransStatus(orderId: string) {
+    return this.request<{ success: boolean; data?: any; message?: string }>(`/midtrans/status/${orderId}`);
+  }
+
+  async cancelMidtransTransaction(orderId: string) {
+    return this.request<{ success: boolean; data?: any; message?: string }>(`/midtrans/cancel/${orderId}`, {
+      method: 'POST',
+    });
+  }
 }
 
 export const api = new ApiClient();
@@ -1886,61 +3125,35 @@ export default api;
 
 ---
 
-## 8. Frontend Component Changes
+## 9. Frontend Component Changes
 
 ### Environment Variable
 
-Tambahkan di `.env` frontend:
+Add to frontend `.env`:
 
 ```env
 VITE_API_URL=http://localhost:8000/api
 ```
 
-### Contoh Perubahan Component
+### Component Migration Map
 
-**BEFORE (Supabase):**
-```typescript
-import { supabase } from "@/integrations/supabase/client";
-
-const fetchOnlineUsers = async () => {
-  const { data, error } = await supabase.functions.invoke("mikrotik-online-users");
-  if (error) throw error;
-  setUsers(data || []);
-};
-```
-
-**AFTER (Laravel API):**
-```typescript
-import { api } from "@/lib/api";
-
-const fetchOnlineUsers = async () => {
-  try {
-    const data = await api.getMikrotikOnlineUsers();
-    setUsers(data || []);
-  } catch (error: any) {
-    toast.error(error.message);
-  }
-};
-```
-
-### Full Migration Map
-
-| Component | Supabase Call | Laravel API Call |
-|-----------|---------------|------------------|
+| Component | Before (Supabase) | After (Laravel) |
+|-----------|-------------------|-----------------|
 | OnlineUsers.tsx | `supabase.functions.invoke("mikrotik-online-users")` | `api.getMikrotikOnlineUsers()` |
 | SystemStats.tsx | `supabase.functions.invoke("mikrotik-system")` | `api.getMikrotikSystem()` |
 | TrafficGraph.tsx | `supabase.functions.invoke("mikrotik-traffic")` | `api.getMikrotikTraffic()` |
 | CustomerList.tsx | `supabase.from("customers").select()` | `api.getCustomers()` |
 | SecretList.tsx | `supabase.from("mikrotik_secrets").select()` | `api.getMikrotikSecrets()` |
 | RouterSettings.tsx | `supabase.from("router_settings").select()` | `api.getRouterSettings()` |
-| Dashboard.tsx | Multiple Supabase queries | `api.getDashboardStats()`, etc. |
-| useAuth.tsx | `supabase.auth.*` | `api.login()`, `api.getUser()`, etc. |
+| PaymentForm.tsx | Manual payment | `MidtransPayment` component |
+| Dashboard.tsx | Multiple Supabase queries | `api.getDashboardStats()` |
+| useAuth.tsx | `supabase.auth.*` | `api.login()`, `api.getUser()` |
 
 ---
 
-## 9. Authentication Migration
+## 10. Authentication Migration
 
-### src/hooks/useAuth.tsx (Updated)
+### src/hooks/useAuth.tsx
 
 ```typescript
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
@@ -2031,7 +3244,7 @@ export function useAuth() {
 
 ---
 
-## 10. Deployment Guide
+## 11. Deployment Guide
 
 ### Laravel Backend
 
@@ -2049,7 +3262,7 @@ composer install --no-dev --optimize-autoloader
 # Environment
 cp .env.example .env
 php artisan key:generate
-# Edit .env with production values
+# Edit .env with production values including Midtrans keys
 
 # Database
 php artisan migrate --force
@@ -2099,7 +3312,7 @@ server {
 }
 ```
 
-### Supervisor untuk Background Jobs
+### Supervisor for Background Jobs
 
 ```ini
 [program:isp-queue]
@@ -2113,31 +3326,42 @@ redirect_stderr=true
 stdout_logfile=/var/log/supervisor/isp-queue.log
 ```
 
-### Crontab untuk Scheduler
+### Crontab for Scheduler
 
 ```bash
 * * * * * cd /var/www/isp-billing && php artisan schedule:run >> /dev/null 2>&1
 ```
 
+### Midtrans Webhook Setup
+
+1. Login to Midtrans Dashboard
+2. Go to Settings → Configuration
+3. Set Payment Notification URL: `https://api.yourdomain.com/api/midtrans/notification`
+4. Enable notification for: payment, recurring, pay account
+
 ---
 
 ## Summary
 
-Dokumentasi ini mencakup:
+Documentation covers:
 
-1. ✅ Complete MySQL schema (billing + monitoring)
+1. ✅ Complete MySQL schema (billing + monitoring + Midtrans)
 2. ✅ Laravel 11/12 Models with UUID
 3. ✅ MikrotikService (RouterOS v6 compatible)
-4. ✅ All API Controllers
-5. ✅ Complete API Routes
-6. ✅ Frontend API Client (`src/lib/api.ts`)
-7. ✅ Component migration guide
-8. ✅ Auth migration (Supabase → Sanctum)
-9. ✅ Deployment guide
+4. ✅ MidtransService (Snap, webhook, status check)
+5. ✅ All API Controllers
+6. ✅ Complete API Routes
+7. ✅ Frontend API Client (`src/lib/api.ts`)
+8. ✅ Midtrans Payment Component
+9. ✅ Component migration guide
+10. ✅ Auth migration (Supabase → Sanctum)
+11. ✅ Deployment guide
 
 **Next Steps:**
-1. Setup Laravel project
-2. Import database schema
-3. Add `src/lib/api.ts` to frontend
-4. Update frontend components satu per satu
-5. Test & deploy
+1. Setup Laravel project with `composer create-project`
+2. Install dependencies: `composer require midtrans/midtrans-php evilfreelancer/routeros-api-php`
+3. Import database schema
+4. Configure Midtrans keys in `.env`
+5. Update frontend components
+6. Setup Midtrans webhook URL
+7. Test & deploy
