@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Users, FileText, DollarSign, Activity, TrendingUp, AlertCircle, Clock, Wifi, Cpu, HardDrive } from "lucide-react";
 import { DashboardLayout } from "@/components/DashboardLayout";
@@ -90,14 +91,16 @@ export default function Dashboard() {
     },
   });
 
-  // MikroTik Real-time Data
+  // MikroTik Real-time Data - Using Laravel API
   const { data: onlineUsers } = useQuery({
     queryKey: ["mikrotik-online-users"],
     queryFn: async () => {
       try {
-        const { data, error } = await supabase.functions.invoke("mikrotik-online-users");
-        if (error) throw error;
-        return data || [];
+        const response = await api.getMikrotikOnlineUsers();
+        if (response.success && response.data) {
+          return response.data;
+        }
+        return [];
       } catch (error) {
         console.error("MikroTik online users error:", error);
         return [];
@@ -112,9 +115,11 @@ export default function Dashboard() {
     queryKey: ["mikrotik-system"],
     queryFn: async () => {
       try {
-        const { data, error } = await supabase.functions.invoke("mikrotik-system");
-        if (error) throw error;
-        return data;
+        const response = await api.getMikrotikSystem();
+        if (response.success && response.data) {
+          return response.data;
+        }
+        return { cpu: 0, memory: 0, uptime: "N/A", board: "MikroTik" };
       } catch (error) {
         console.error("MikroTik system stats error:", error);
         return { cpu: 0, memory: 0, uptime: "N/A", board: "MikroTik" };
@@ -125,10 +130,12 @@ export default function Dashboard() {
     retryDelay: 1000,
   });
 
-  const pppoeUsers = onlineUsers?.filter((u: any) => u.type === "pppoe")?.length || 0;
-  const hotspotUsers = onlineUsers?.filter((u: any) => u.type === "hotspot")?.length || 0;
+  const usersArray = (onlineUsers || []) as any[];
+  const pppoeUsers = usersArray.filter((u: any) => u.type === "pppoe")?.length || 0;
+  const hotspotUsers = usersArray.filter((u: any) => u.type === "hotspot")?.length || 0;
+  const stats = systemStats as { cpu: number; memory: number; uptime: string; board: string } | null;
 
-  const stats = [
+  const statCards = [
     {
       title: "Total Customers",
       value: customersCount || 0,
@@ -166,7 +173,7 @@ export default function Dashboard() {
   const mikrotikStats = [
     {
       title: "Online Users",
-      value: onlineUsers?.length || 0,
+      value: usersArray.length || 0,
       subtitle: `${pppoeUsers} PPPoE • ${hotspotUsers} Hotspot`,
       icon: Wifi,
       color: "text-success",
@@ -174,16 +181,16 @@ export default function Dashboard() {
     },
     {
       title: "CPU Usage",
-      value: `${systemStats?.cpu || 0}%`,
-      subtitle: systemStats?.board || "Router",
+      value: `${stats?.cpu || 0}%`,
+      subtitle: stats?.board || "Router",
       icon: Cpu,
       color: "text-warning",
       bgColor: "bg-warning/10",
     },
     {
       title: "Memory Usage",
-      value: `${systemStats?.memory || 0}%`,
-      subtitle: systemStats?.uptime || "0d 0h 0m",
+      value: `${stats?.memory || 0}%`,
+      subtitle: stats?.uptime || "0d 0h 0m",
       icon: HardDrive,
       color: "text-info",
       bgColor: "bg-info/10",
@@ -199,7 +206,7 @@ export default function Dashboard() {
         </div>
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          {stats.map((stat) => (
+          {statCards.map((stat) => (
             <Card key={stat.title} className="shadow-soft hover:shadow-elegant transition-all duration-300">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium text-muted-foreground">

@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { Edit, Trash2, Power, PowerOff, WifiOff } from "lucide-react";
 import {
@@ -47,9 +48,9 @@ export function SubscriptionList({
 
   const fetchOnlineUsers = async () => {
     try {
-      const { data, error } = await supabase.functions.invoke("mikrotik-online-users");
-      if (!error && data) {
-        const usernames = data.map((user: any) => user.name || user.username);
+      const response = await api.getMikrotikOnlineUsers();
+      if (response.success && response.data) {
+        const usernames = (response.data as any[]).map((user: any) => user.name || user.username);
         setOnlineUsers(usernames);
       }
     } catch (error) {
@@ -110,13 +111,12 @@ export function SubscriptionList({
 
       if (error) throw error;
 
-      // Call Mikrotik to enable/disable user
-      await supabase.functions.invoke("mikrotik-toggle-user", {
-        body: {
-          username: subscription.mikrotik_username,
-          enable: newStatus === "active",
-        },
-      });
+      // Call Laravel API to enable/disable user in MikroTik
+      await api.toggleMikrotikUser(
+        subscription.mikrotik_username,
+        subscription.packages?.type || "pppoe",
+        newStatus === "active" ? "enable" : "disable"
+      );
 
       toast.success(
         `Subscription ${newStatus === "active" ? "activated" : "suspended"}`
@@ -129,14 +129,9 @@ export function SubscriptionList({
 
   const disconnectUser = async (username: string) => {
     try {
-      const { data, error } = await supabase.functions.invoke(
-        "mikrotik-disconnect-user",
-        {
-          body: { username },
-        }
-      );
+      const response = await api.disconnectMikrotikUser(username, "pppoe");
 
-      if (error) throw error;
+      if (!response.success) throw new Error(response.error);
 
       toast.success(`User ${username} disconnected successfully`);
       fetchOnlineUsers();

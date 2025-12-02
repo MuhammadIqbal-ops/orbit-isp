@@ -2,6 +2,7 @@ import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import {
   LayoutDashboard,
   Users,
@@ -71,17 +72,19 @@ export function AppSidebar() {
     queryKey: ["mikrotik-online-sidebar"],
     queryFn: async () => {
       try {
-        const { data, error } = await supabase.functions.invoke("mikrotik-online-users");
-        if (error) throw error;
-        
-        const pppoeCount = data?.filter((u: any) => u.type === "pppoe")?.length || 0;
-        const hotspotCount = data?.filter((u: any) => u.type === "hotspot")?.length || 0;
-        
-        return {
-          total: data?.length || 0,
-          pppoe: pppoeCount,
-          hotspot: hotspotCount,
-        };
+        const response = await api.getMikrotikOnlineUsers();
+        if (response.success && response.data) {
+          const users = response.data as any[];
+          const pppoeCount = users.filter((u: any) => u.type === "pppoe")?.length || 0;
+          const hotspotCount = users.filter((u: any) => u.type === "hotspot")?.length || 0;
+          
+          return {
+            total: users.length || 0,
+            pppoe: pppoeCount,
+            hotspot: hotspotCount,
+          };
+        }
+        return { total: 0, pppoe: 0, hotspot: 0 };
       } catch (error) {
         console.error("MikroTik connection error:", error);
         return { total: 0, pppoe: 0, hotspot: 0 };
