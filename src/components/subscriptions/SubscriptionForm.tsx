@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
@@ -139,21 +140,16 @@ export function SubscriptionForm({
 
         if (subError) throw subError;
 
-        // Create PPPoE user in Mikrotik
-        const { error: mikrotikError } = await supabase.functions.invoke(
-          "mikrotik-create-user",
-          {
-            body: {
-              subscriptionId: subscription.id,
-              username: values.mikrotik_username,
-              password: values.mikrotik_password,
-              packageId: values.package_id,
-            },
-          }
-        );
+        // Create PPPoE user in MikroTik via Laravel API
+        const mikrotikResponse = await api.createMikrotikUser({
+          subscriptionId: subscription.id,
+          username: values.mikrotik_username,
+          password: values.mikrotik_password,
+          packageId: values.package_id,
+        });
 
-        if (mikrotikError) {
-          console.error("Mikrotik user creation failed:", mikrotikError);
+        if (!mikrotikResponse.success) {
+          console.error("Mikrotik user creation failed:", mikrotikResponse.error);
           toast.warning(
             "Subscription created but Mikrotik user creation failed"
           );
