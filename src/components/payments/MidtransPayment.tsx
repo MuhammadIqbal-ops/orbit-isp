@@ -6,12 +6,6 @@ import { Loader2, CreditCard, CheckCircle, XCircle, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 
-// API response type
-interface SnapTokenResponse {
-  success: boolean;
-  data?: { snap_token: string; order_id: string };
-  error?: string;
-}
 
 declare global {
   interface Window {
@@ -109,16 +103,13 @@ export function MidtransPayment({
 
     try {
       // Request snap token from Laravel backend
-      const response = await api.request<SnapTokenResponse>('/midtrans/snap-token', {
-        method: 'POST',
-        body: JSON.stringify({
-          invoice_id: invoiceId,
-          amount,
-          customer_name: customerName,
-          customer_email: customerEmail,
-          customer_phone: customerPhone,
-          description: description || `Payment for Invoice #${invoiceId}`,
-        }),
+      const response = await api.createSnapToken({
+        invoice_id: invoiceId,
+        amount,
+        customer_name: customerName,
+        customer_email: customerEmail,
+        customer_phone: customerPhone,
+        description: description || `Payment for Invoice #${invoiceId}`,
       });
 
       if (!response.success || !response.data?.snap_token) {

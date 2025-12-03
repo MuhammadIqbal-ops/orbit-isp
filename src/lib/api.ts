@@ -470,6 +470,21 @@ class ApiClient {
       body: JSON.stringify({ type }),
     });
   }
+
+  // ==================== MIDTRANS PAYMENT ====================
+  async createSnapToken(data: {
+    invoice_id: string;
+    amount: number;
+    customer_name: string;
+    customer_email?: string;
+    customer_phone?: string;
+    description?: string;
+  }) {
+    return this.request<{ snap_token: string; order_id: string }>('/midtrans/snap-token', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
 }
 
 export const api = new ApiClient();
