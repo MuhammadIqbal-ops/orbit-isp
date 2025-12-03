@@ -4,6 +4,66 @@ Dokumentasi lengkap untuk migrasi dari Supabase Edge Functions ke Laravel backen
 
 ---
 
+## ⚠️ TROUBLESHOOTING: Error "Not Found" atau "Network Error"
+
+Jika Anda mendapat error "Not Found" atau "Network Error", ikuti langkah-langkah ini:
+
+### 1. Pastikan Laravel Backend Running
+
+```bash
+# Masuk ke folder Laravel project
+cd C:\xampp\htdocs\isp-billing-api
+
+# Jalankan server Laravel
+php artisan serve
+
+# Output: Starting Laravel development server: http://127.0.0.1:8000
+```
+
+### 2. Konfigurasi Frontend .env
+
+Buat file `.env.local` di root folder frontend React:
+
+```env
+VITE_API_URL=http://localhost:8000/api
+```
+
+**PENTING**: Restart frontend development server setelah mengubah .env:
+
+```bash
+# Stop frontend (Ctrl+C), lalu jalankan ulang
+npm run dev
+```
+
+### 3. Test API dengan Browser/Postman
+
+Buka browser dan akses:
+- `http://localhost:8000/api/packages` → Harus return JSON (atau error 401 jika butuh auth)
+- `http://localhost:8000/api/auth/login` → POST endpoint untuk login
+
+### 4. Cek CORS Configuration
+
+Pastikan `config/cors.php` di Laravel sudah benar:
+
+```php
+'allowed_origins' => [
+    'http://localhost:5173',  // Vite default
+    'http://localhost:8080',
+    'http://localhost:3000',
+],
+```
+
+### 5. Debug API Client
+
+Tambahkan console.log di `src/lib/api.ts` untuk debug:
+
+```typescript
+// Di method request(), tambahkan:
+console.log('API Request:', `${API_URL}${endpoint}`);
+```
+
+---
+
 ## Table of Contents
 
 1. [Backend Setup](#1-backend-setup)
