@@ -7,6 +7,46 @@
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
+// Debug: Log API URL on initialization
+console.log('🔗 API URL:', API_URL);
+
+// Connection test function
+export async function testApiConnection(): Promise<{
+  connected: boolean;
+  url: string;
+  message: string;
+  latency?: number;
+}> {
+  const startTime = Date.now();
+  try {
+    const response = await fetch(`${API_URL}/health`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+    });
+    const latency = Date.now() - startTime;
+    
+    if (response.ok) {
+      return {
+        connected: true,
+        url: API_URL,
+        message: `Connected to Laravel backend (${latency}ms)`,
+        latency,
+      };
+    }
+    return {
+      connected: false,
+      url: API_URL,
+      message: `Server responded with status ${response.status}`,
+    };
+  } catch (error: any) {
+    return {
+      connected: false,
+      url: API_URL,
+      message: error.message || 'Failed to connect to backend',
+    };
+  }
+}
+
 interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
