@@ -13,6 +13,7 @@ import {
   Activity,
   Wifi,
   LogOut,
+  Key,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -35,7 +36,7 @@ const menuItems = [
   { title: "Customers", url: "/customers", icon: Users, showBadge: true, badgeKey: "customers" },
   { title: "Packages", url: "/packages", icon: Package, showBadge: true, badgeKey: "packages" },
   { title: "Subscriptions", url: "/subscriptions", icon: Wifi, showBadge: true, badgeKey: "online-detail" },
-  { title: "Secrets", url: "/secrets", icon: LogOut, showBadge: false },
+  { title: "Secrets", url: "/secrets", icon: Key, showBadge: false },
   { title: "Invoices", url: "/invoices", icon: FileText },
   { title: "Payments", url: "/payments", icon: CreditCard },
   { title: "Monitoring", url: "/monitoring", icon: Activity, showBadge: true, badgeKey: "online-total" },
@@ -111,38 +112,60 @@ export function AppSidebar() {
   };
 
   return (
-    <Sidebar className={collapsed ? "w-14" : "w-60"}>
-      <SidebarContent>
-        <div className="p-4">
-          <div className="flex items-center gap-2">
-            <Wifi className="h-6 w-6 text-primary" />
-            {!collapsed && <span className="text-lg font-bold text-sidebar-foreground">ISP Billing</span>}
+    <Sidebar className={`${collapsed ? "w-20" : "w-72"} border-r-0 bg-sidebar transition-all duration-300`}>
+      <SidebarContent className="px-3">
+        {/* Logo Section */}
+        <div className="p-4 mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-brand flex items-center justify-center shadow-brand">
+              <Wifi className="h-5 w-5 text-white" />
+            </div>
+            {!collapsed && (
+              <div>
+                <span className="text-lg font-bold text-sidebar-foreground">ISP Billing</span>
+                <p className="text-xs text-sidebar-foreground/60">Management System</p>
+              </div>
+            )}
           </div>
         </div>
 
         <SidebarGroup>
-          <SidebarGroupLabel>Main Menu</SidebarGroupLabel>
+          {!collapsed && (
+            <SidebarGroupLabel className="text-xs font-semibold text-sidebar-foreground/50 uppercase tracking-wider px-3 mb-2">
+              Main Menu
+            </SidebarGroupLabel>
+          )}
           <SidebarGroupContent>
-            <SidebarMenu>
+            <SidebarMenu className="space-y-1">
               {menuItems.map((item) => {
                 const badgeValue = item.showBadge && item.badgeKey ? getBadgeValue(item.badgeKey) : null;
+                const active = isActive(item.url);
+                
                 return (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton asChild>
                       <NavLink
                         to={item.url}
                         end
-                        className="flex items-center gap-2 hover:bg-sidebar-accent rounded-md transition-smooth"
-                        activeClassName="bg-sidebar-accent text-primary font-medium"
+                        className={`flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200
+                          ${active 
+                            ? "bg-gradient-brand text-white shadow-brand" 
+                            : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                          }`}
+                        activeClassName=""
                       >
-                        <item.icon className="h-4 w-4" />
+                        <item.icon className={`h-5 w-5 ${active ? "" : "opacity-70"}`} />
                         {!collapsed && (
                           <div className="flex items-center justify-between w-full">
-                            <span>{item.title}</span>
+                            <span className="font-medium">{item.title}</span>
                             {badgeValue !== null && badgeValue !== undefined && (
                               <Badge 
                                 variant="secondary" 
-                                className="ml-auto text-xs px-2 py-0.5"
+                                className={`ml-auto text-xs px-2 py-0.5 rounded-lg
+                                  ${active 
+                                    ? "bg-white/20 text-white border-0" 
+                                    : "bg-sidebar-accent text-sidebar-foreground/70"
+                                  }`}
                               >
                                 {badgeValue}
                               </Badge>
@@ -159,18 +182,25 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter>
-        <div className="p-4">
+      <SidebarFooter className="px-3 pb-4">
+        {/* User Info Card */}
+        <div className={`p-3 rounded-2xl bg-sidebar-accent/50 ${collapsed ? "flex justify-center" : ""}`}>
           {!collapsed && user && (
-            <div className="mb-2 text-xs text-sidebar-foreground/70">
-              {user.email}
+            <div className="mb-3">
+              <p className="text-sm font-medium text-sidebar-foreground truncate">
+                {user.email?.split('@')[0]}
+              </p>
+              <p className="text-xs text-sidebar-foreground/50 truncate">
+                {user.email}
+              </p>
             </div>
           )}
           <Button
             variant="ghost"
             size={collapsed ? "icon" : "default"}
             onClick={signOut}
-            className="w-full justify-start text-sidebar-foreground hover:bg-sidebar-accent"
+            className={`w-full justify-start text-sidebar-foreground/70 hover:text-white hover:bg-destructive/80 rounded-xl transition-all
+              ${collapsed ? "h-10 w-10" : ""}`}
           >
             <LogOut className="h-4 w-4" />
             {!collapsed && <span className="ml-2">Logout</span>}

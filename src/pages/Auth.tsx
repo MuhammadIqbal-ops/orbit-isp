@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Wifi, Loader2 } from "lucide-react";
+import { Wifi, Loader2, Shield, Zap, Users } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -64,93 +64,190 @@ export default function Auth() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-background via-secondary/10 to-background p-4">
-      <Card className="w-full max-w-md shadow-elegant border-muted/50">
-        <CardHeader className="text-center space-y-4">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-primary shadow-elegant">
-            <Wifi className="h-8 w-8 text-white" />
+    <div className="flex min-h-screen bg-background">
+      {/* Left side - Branding */}
+      <div className="hidden lg:flex lg:w-1/2 bg-gradient-brand relative overflow-hidden">
+        {/* Background pattern */}
+        <div className="absolute inset-0 opacity-10">
+          <div className="absolute top-20 left-20 w-72 h-72 bg-white rounded-full blur-3xl" />
+          <div className="absolute bottom-20 right-20 w-96 h-96 bg-white rounded-full blur-3xl" />
+        </div>
+        
+        <div className="relative z-10 flex flex-col justify-center px-16 text-white">
+          <div className="flex items-center gap-4 mb-8">
+            <div className="w-14 h-14 rounded-2xl bg-white/20 backdrop-blur flex items-center justify-center">
+              <Wifi className="h-7 w-7" />
+            </div>
+            <span className="text-2xl font-bold">ISP Billing</span>
           </div>
-          <div>
-            <CardTitle className="text-3xl font-bold">ISP Billing System</CardTitle>
-            <CardDescription className="text-base mt-2">
-              Manage your ISP operations efficiently
-            </CardDescription>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <Tabs defaultValue="signin" className="w-full">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="signin">Sign In</TabsTrigger>
-              <TabsTrigger value="signup">Sign Up</TabsTrigger>
-            </TabsList>
-            
-            <TabsContent value="signin" className="space-y-4">
-              <form onSubmit={handleSignIn} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="email-signin">Email</Label>
-                  <Input
-                    id="email-signin"
-                    type="email"
-                    placeholder="admin@example.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="password-signin">Password</Label>
-                  <Input
-                    id="password-signin"
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                  />
-                </div>
-                <Button type="submit" className="w-full" disabled={loading}>
-                  {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Sign In
-                </Button>
-              </form>
-            </TabsContent>
-            
-            <TabsContent value="signup" className="space-y-4">
-              <div className="rounded-lg bg-primary/10 p-3 text-sm text-primary border border-primary/20">
-                <p className="font-medium">First user becomes admin</p>
-                <p className="text-xs mt-1 opacity-90">The first account created will automatically receive admin privileges</p>
+          
+          <h1 className="text-4xl font-bold mb-6 leading-tight">
+            Complete ISP Management System
+          </h1>
+          <p className="text-lg text-white/80 mb-12 max-w-md">
+            Manage customers, billing, and MikroTik routers all in one powerful platform.
+          </p>
+          
+          {/* Features */}
+          <div className="space-y-6">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center">
+                <Users className="h-5 w-5" />
               </div>
-              <form onSubmit={handleSignUp} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="email-signup">Email</Label>
-                  <Input
-                    id="email-signup"
-                    type="email"
-                    placeholder="admin@example.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="password-signup">Password</Label>
-                  <Input
-                    id="password-signup"
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                    minLength={6}
-                  />
-                </div>
-                <Button type="submit" className="w-full" disabled={loading}>
-                  {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Sign Up
-                </Button>
-              </form>
-            </TabsContent>
-          </Tabs>
-        </CardContent>
-      </Card>
+              <div>
+                <p className="font-semibold">Customer Management</p>
+                <p className="text-sm text-white/70">Manage unlimited customers</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center">
+                <Zap className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="font-semibold">Real-time Monitoring</p>
+                <p className="text-sm text-white/70">Live traffic & system stats</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center">
+                <Shield className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="font-semibold">Secure & Reliable</p>
+                <p className="text-sm text-white/70">Enterprise-grade security</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Right side - Auth form */}
+      <div className="flex-1 flex items-center justify-center p-8">
+        <div className="w-full max-w-md">
+          {/* Mobile logo */}
+          <div className="lg:hidden flex items-center justify-center gap-3 mb-8">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-brand flex items-center justify-center shadow-brand">
+              <Wifi className="h-6 w-6 text-white" />
+            </div>
+            <span className="text-xl font-bold">ISP Billing</span>
+          </div>
+
+          <Card className="border-border/50 shadow-xl bg-card/50 backdrop-blur">
+            <CardHeader className="text-center space-y-2 pb-2">
+              <CardTitle className="text-2xl font-bold">Welcome Back</CardTitle>
+              <CardDescription>
+                Sign in to your account to continue
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="pt-4">
+              <Tabs defaultValue="signin" className="w-full">
+                <TabsList className="grid w-full grid-cols-2 mb-6 bg-secondary/50 p-1 rounded-xl">
+                  <TabsTrigger 
+                    value="signin" 
+                    className="rounded-lg data-[state=active]:bg-gradient-brand data-[state=active]:text-white data-[state=active]:shadow-md transition-all"
+                  >
+                    Sign In
+                  </TabsTrigger>
+                  <TabsTrigger 
+                    value="signup"
+                    className="rounded-lg data-[state=active]:bg-gradient-brand data-[state=active]:text-white data-[state=active]:shadow-md transition-all"
+                  >
+                    Sign Up
+                  </TabsTrigger>
+                </TabsList>
+                
+                <TabsContent value="signin" className="space-y-4 mt-0">
+                  <form onSubmit={handleSignIn} className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="email-signin" className="text-sm font-medium">
+                        Email
+                      </Label>
+                      <Input
+                        id="email-signin"
+                        type="email"
+                        placeholder="admin@example.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        required
+                        className="h-12"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="password-signin" className="text-sm font-medium">
+                        Password
+                      </Label>
+                      <Input
+                        id="password-signin"
+                        type="password"
+                        placeholder="••••••••"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        required
+                        className="h-12"
+                      />
+                    </div>
+                    <Button type="submit" className="w-full h-12 text-base" disabled={loading}>
+                      {loading && <Loader2 className="mr-2 h-5 w-5 animate-spin" />}
+                      Sign In
+                    </Button>
+                  </form>
+                </TabsContent>
+                
+                <TabsContent value="signup" className="space-y-4 mt-0">
+                  <div className="rounded-xl bg-primary/10 p-4 border border-primary/20">
+                    <div className="flex items-center gap-2 text-primary mb-1">
+                      <Shield className="h-4 w-4" />
+                      <p className="font-semibold text-sm">First user becomes admin</p>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      The first account created will automatically receive admin privileges
+                    </p>
+                  </div>
+                  <form onSubmit={handleSignUp} className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="email-signup" className="text-sm font-medium">
+                        Email
+                      </Label>
+                      <Input
+                        id="email-signup"
+                        type="email"
+                        placeholder="admin@example.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        required
+                        className="h-12"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="password-signup" className="text-sm font-medium">
+                        Password
+                      </Label>
+                      <Input
+                        id="password-signup"
+                        type="password"
+                        placeholder="••••••••"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        required
+                        minLength={6}
+                        className="h-12"
+                      />
+                    </div>
+                    <Button type="submit" className="w-full h-12 text-base" disabled={loading}>
+                      {loading && <Loader2 className="mr-2 h-5 w-5 animate-spin" />}
+                      Create Account
+                    </Button>
+                  </form>
+                </TabsContent>
+              </Tabs>
+            </CardContent>
+          </Card>
+
+          <p className="text-center text-xs text-muted-foreground mt-6">
+            By signing in, you agree to our Terms of Service and Privacy Policy
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
