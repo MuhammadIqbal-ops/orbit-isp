@@ -418,6 +418,1279 @@ class MikrotikController extends Controller
 }
 ```
 
+---
+
+## 📦 Complete CRUD Implementation
+
+### Eloquent Models
+
+#### Customer Model
+```php
+// app/Models/Customer.php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+
+class Customer extends Model
+{
+    use HasUuids;
+
+    protected $fillable = [
+        'name',
+        'email',
+        'phone',
+        'address',
+        'status',
+    ];
+
+    protected $casts = [
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+    ];
+
+    public function subscriptions(): HasMany
+    {
+        return $this->hasMany(Subscription::class);
+    }
+
+    public function activeSubscription(): HasOne
+    {
+        return $this->hasOne(Subscription::class)
+            ->where('status', 'active')
+            ->latest();
+    }
+
+    public function invoices(): HasMany
+    {
+        return $this->hasManyThrough(Invoice::class, Subscription::class);
+    }
+}
+```
+
+#### Package Model
+```php
+// app/Models/Package.php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+
+class Package extends Model
+{
+    use HasUuids;
+
+    protected $fillable = [
+        'name',
+        'price',
+        'bandwidth',
+        'burst',
+        'priority',
+        'type',
+    ];
+
+    protected $casts = [
+        'price' => 'decimal:2',
+        'priority' => 'integer',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+    ];
+
+    public function subscriptions(): HasMany
+    {
+        return $this->hasMany(Subscription::class);
+    }
+}
+```
+
+#### Subscription Model
+```php
+// app/Models/Subscription.php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+
+class Subscription extends Model
+{
+    use HasUuids;
+
+    protected $fillable = [
+        'customer_id',
+        'package_id',
+        'start_date',
+        'end_date',
+        'mikrotik_username',
+        'mikrotik_password',
+        'auto_renew',
+        'status',
+    ];
+
+    protected $casts = [
+        'start_date' => 'date',
+        'end_date' => 'date',
+        'auto_renew' => 'boolean',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+    ];
+
+    public function customer(): BelongsTo
+    {
+        return $this->belongsTo(Customer::class);
+    }
+
+    public function package(): BelongsTo
+    {
+        return $this->belongsTo(Package::class);
+    }
+
+    public function invoices(): HasMany
+    {
+        return $this->hasMany(Invoice::class);
+    }
+
+    public function latestInvoice(): HasOne
+    {
+        return $this->hasOne(Invoice::class)->latest();
+    }
+}
+```
+
+#### Invoice Model
+```php
+// app/Models/Invoice.php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+
+class Invoice extends Model
+{
+    use HasUuids;
+
+    protected $fillable = [
+        'subscription_id',
+        'amount',
+        'due_date',
+        'status',
+        'payment_reference',
+        'payment_url',
+        'notes',
+    ];
+
+    protected $casts = [
+        'amount' => 'decimal:2',
+        'due_date' => 'date',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+    ];
+
+    public function subscription(): BelongsTo
+    {
+        return $this->belongsTo(Subscription::class);
+    }
+
+    public function payments(): HasMany
+    {
+        return $this->hasMany(Payment::class);
+    }
+
+    public function customer()
+    {
+        return $this->subscription?->customer;
+    }
+}
+```
+
+#### Payment Model
+```php
+// app/Models/Payment.php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
+class Payment extends Model
+{
+    use HasUuids;
+
+    protected $fillable = [
+        'invoice_id',
+        'amount',
+        'method',
+        'payment_date',
+        'transaction_id',
+    ];
+
+    protected $casts = [
+        'amount' => 'decimal:2',
+        'payment_date' => 'datetime',
+        'created_at' => 'datetime',
+    ];
+
+    public function invoice(): BelongsTo
+    {
+        return $this->belongsTo(Invoice::class);
+    }
+}
+```
+
+---
+
+### Form Request Validation Classes
+
+#### CustomerRequest
+```php
+// app/Http/Requests/CustomerRequest.php
+<?php
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class CustomerRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'name' => 'required|string|max:100',
+            'email' => 'nullable|email|max:255',
+            'phone' => 'nullable|string|max:20',
+            'address' => 'nullable|string|max:500',
+            'status' => 'required|in:active,inactive,suspended',
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'name.required' => 'Nama customer wajib diisi',
+            'name.max' => 'Nama maksimal 100 karakter',
+            'email.email' => 'Format email tidak valid',
+            'status.in' => 'Status harus active, inactive, atau suspended',
+        ];
+    }
+}
+```
+
+#### PackageRequest
+```php
+// app/Http/Requests/PackageRequest.php
+<?php
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class PackageRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'name' => 'required|string|max:100',
+            'price' => 'required|numeric|min:0',
+            'bandwidth' => 'required|string|max:50',
+            'burst' => 'nullable|string|max:50',
+            'priority' => 'nullable|integer|min:1|max:8',
+            'type' => 'required|in:pppoe,hotspot',
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'name.required' => 'Nama paket wajib diisi',
+            'price.required' => 'Harga wajib diisi',
+            'price.numeric' => 'Harga harus berupa angka',
+            'bandwidth.required' => 'Bandwidth wajib diisi',
+            'type.in' => 'Tipe harus pppoe atau hotspot',
+        ];
+    }
+}
+```
+
+#### SubscriptionRequest
+```php
+// app/Http/Requests/SubscriptionRequest.php
+<?php
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class SubscriptionRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'customer_id' => 'required|exists:customers,id',
+            'package_id' => 'required|exists:packages,id',
+            'start_date' => 'required|date',
+            'end_date' => 'required|date|after:start_date',
+            'mikrotik_username' => 'required|string|min:3|max:50',
+            'mikrotik_password' => 'required|string|min:6|max:100',
+            'auto_renew' => 'boolean',
+            'status' => 'nullable|in:active,suspended,expired',
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'customer_id.required' => 'Customer wajib dipilih',
+            'customer_id.exists' => 'Customer tidak ditemukan',
+            'package_id.required' => 'Paket wajib dipilih',
+            'package_id.exists' => 'Paket tidak ditemukan',
+            'end_date.after' => 'Tanggal akhir harus setelah tanggal mulai',
+            'mikrotik_username.min' => 'Username minimal 3 karakter',
+            'mikrotik_password.min' => 'Password minimal 6 karakter',
+        ];
+    }
+}
+```
+
+#### InvoiceRequest
+```php
+// app/Http/Requests/InvoiceRequest.php
+<?php
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class InvoiceRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'subscription_id' => 'required|exists:subscriptions,id',
+            'amount' => 'required|numeric|min:0',
+            'due_date' => 'required|date',
+            'status' => 'nullable|in:unpaid,paid,overdue',
+            'payment_reference' => 'nullable|string|max:100',
+            'payment_url' => 'nullable|url',
+            'notes' => 'nullable|string|max:500',
+        ];
+    }
+}
+```
+
+#### PaymentRequest
+```php
+// app/Http/Requests/PaymentRequest.php
+<?php
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class PaymentRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'invoice_id' => 'required|exists:invoices,id',
+            'amount' => 'required|numeric|min:0',
+            'method' => 'required|in:cash,bank_transfer,card,mobile_money,midtrans',
+            'payment_date' => 'nullable|date',
+            'transaction_id' => 'nullable|string|max:100',
+        ];
+    }
+}
+```
+
+---
+
+### CRUD Controllers
+
+#### CustomerController
+```php
+// app/Http/Controllers/Api/CustomerController.php
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Http\Requests\CustomerRequest;
+use App\Models\Customer;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+
+class CustomerController extends Controller
+{
+    public function index(Request $request): JsonResponse
+    {
+        $query = Customer::query()
+            ->withCount(['subscriptions', 'subscriptions as active_subscriptions_count' => function ($q) {
+                $q->where('status', 'active');
+            }]);
+
+        // Search
+        if ($search = $request->get('search')) {
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('email', 'like', "%{$search}%")
+                  ->orWhere('phone', 'like', "%{$search}%");
+            });
+        }
+
+        // Filter by status
+        if ($status = $request->get('status')) {
+            $query->where('status', $status);
+        }
+
+        // Sort
+        $sortBy = $request->get('sort_by', 'created_at');
+        $sortDir = $request->get('sort_dir', 'desc');
+        $query->orderBy($sortBy, $sortDir);
+
+        // Paginate
+        $perPage = $request->get('per_page', 15);
+        $customers = $query->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'data' => $customers->items(),
+            'pagination' => [
+                'current_page' => $customers->currentPage(),
+                'last_page' => $customers->lastPage(),
+                'per_page' => $customers->perPage(),
+                'total' => $customers->total(),
+            ],
+        ]);
+    }
+
+    public function store(CustomerRequest $request): JsonResponse
+    {
+        $customer = Customer::create($request->validated());
+
+        return response()->json([
+            'success' => true,
+            'data' => $customer,
+            'message' => 'Customer berhasil dibuat',
+        ], 201);
+    }
+
+    public function show(string $id): JsonResponse
+    {
+        $customer = Customer::with(['subscriptions.package', 'subscriptions.invoices'])
+            ->findOrFail($id);
+
+        return response()->json([
+            'success' => true,
+            'data' => $customer,
+        ]);
+    }
+
+    public function update(CustomerRequest $request, string $id): JsonResponse
+    {
+        $customer = Customer::findOrFail($id);
+        $customer->update($request->validated());
+
+        return response()->json([
+            'success' => true,
+            'data' => $customer,
+            'message' => 'Customer berhasil diupdate',
+        ]);
+    }
+
+    public function destroy(string $id): JsonResponse
+    {
+        $customer = Customer::findOrFail($id);
+
+        // Check for active subscriptions
+        if ($customer->subscriptions()->where('status', 'active')->exists()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Tidak dapat menghapus customer dengan subscription aktif',
+            ], 422);
+        }
+
+        $customer->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Customer berhasil dihapus',
+        ]);
+    }
+}
+```
+
+#### PackageController
+```php
+// app/Http/Controllers/Api/PackageController.php
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Http\Requests\PackageRequest;
+use App\Models\Package;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+
+class PackageController extends Controller
+{
+    public function index(Request $request): JsonResponse
+    {
+        $query = Package::query()
+            ->withCount('subscriptions');
+
+        // Filter by type
+        if ($type = $request->get('type')) {
+            $query->where('type', $type);
+        }
+
+        // Sort
+        $sortBy = $request->get('sort_by', 'price');
+        $sortDir = $request->get('sort_dir', 'asc');
+        $query->orderBy($sortBy, $sortDir);
+
+        $packages = $query->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $packages,
+        ]);
+    }
+
+    public function store(PackageRequest $request): JsonResponse
+    {
+        $package = Package::create($request->validated());
+
+        return response()->json([
+            'success' => true,
+            'data' => $package,
+            'message' => 'Paket berhasil dibuat',
+        ], 201);
+    }
+
+    public function show(string $id): JsonResponse
+    {
+        $package = Package::withCount('subscriptions')->findOrFail($id);
+
+        return response()->json([
+            'success' => true,
+            'data' => $package,
+        ]);
+    }
+
+    public function update(PackageRequest $request, string $id): JsonResponse
+    {
+        $package = Package::findOrFail($id);
+        $package->update($request->validated());
+
+        return response()->json([
+            'success' => true,
+            'data' => $package,
+            'message' => 'Paket berhasil diupdate',
+        ]);
+    }
+
+    public function destroy(string $id): JsonResponse
+    {
+        $package = Package::findOrFail($id);
+
+        // Check for active subscriptions
+        if ($package->subscriptions()->where('status', 'active')->exists()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Tidak dapat menghapus paket dengan subscription aktif',
+            ], 422);
+        }
+
+        $package->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Paket berhasil dihapus',
+        ]);
+    }
+}
+```
+
+#### SubscriptionController
+```php
+// app/Http/Controllers/Api/SubscriptionController.php
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Http\Requests\SubscriptionRequest;
+use App\Models\Invoice;
+use App\Models\Package;
+use App\Models\Subscription;
+use App\Services\MikrotikService;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+
+class SubscriptionController extends Controller
+{
+    protected MikrotikService $mikrotik;
+
+    public function __construct(MikrotikService $mikrotik)
+    {
+        $this->mikrotik = $mikrotik;
+    }
+
+    public function index(Request $request): JsonResponse
+    {
+        $query = Subscription::with(['customer', 'package'])
+            ->withCount('invoices');
+
+        // Filter by status
+        if ($status = $request->get('status')) {
+            $query->where('status', $status);
+        }
+
+        // Filter by customer
+        if ($customerId = $request->get('customer_id')) {
+            $query->where('customer_id', $customerId);
+        }
+
+        // Sort
+        $sortBy = $request->get('sort_by', 'created_at');
+        $sortDir = $request->get('sort_dir', 'desc');
+        $query->orderBy($sortBy, $sortDir);
+
+        // Paginate
+        $perPage = $request->get('per_page', 15);
+        $subscriptions = $query->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'data' => $subscriptions->items(),
+            'pagination' => [
+                'current_page' => $subscriptions->currentPage(),
+                'last_page' => $subscriptions->lastPage(),
+                'per_page' => $subscriptions->perPage(),
+                'total' => $subscriptions->total(),
+            ],
+        ]);
+    }
+
+    public function store(SubscriptionRequest $request): JsonResponse
+    {
+        $data = $request->validated();
+        $data['status'] = $data['status'] ?? 'active';
+
+        // Create subscription
+        $subscription = Subscription::create($data);
+
+        // Get package for MikroTik profile
+        $package = Package::findOrFail($data['package_id']);
+
+        // Create MikroTik user
+        try {
+            if ($package->type === 'pppoe') {
+                $this->mikrotik->createPPPoESecret([
+                    'username' => $data['mikrotik_username'],
+                    'password' => $data['mikrotik_password'],
+                    'profile' => $package->name,
+                ]);
+            } else {
+                $this->mikrotik->createHotspotUser([
+                    'username' => $data['mikrotik_username'],
+                    'password' => $data['mikrotik_password'],
+                    'profile' => $package->name,
+                ]);
+            }
+
+            // Create simple queue
+            $this->mikrotik->createQueue([
+                'name' => $data['mikrotik_username'],
+                'target' => $data['mikrotik_username'],
+                'max-limit' => $package->bandwidth,
+                'burst-limit' => $package->burst ?? $package->bandwidth,
+                'priority' => $package->priority ?? 8,
+            ]);
+        } catch (\Exception $e) {
+            // Log error but continue (MikroTik might not be connected)
+            \Log::warning('MikroTik sync failed: ' . $e->getMessage());
+        }
+
+        // Create first invoice
+        Invoice::create([
+            'subscription_id' => $subscription->id,
+            'amount' => $package->price,
+            'due_date' => now()->addDays(7),
+            'status' => 'unpaid',
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'data' => $subscription->load(['customer', 'package', 'invoices']),
+            'message' => 'Subscription berhasil dibuat',
+        ], 201);
+    }
+
+    public function show(string $id): JsonResponse
+    {
+        $subscription = Subscription::with([
+            'customer',
+            'package',
+            'invoices.payments',
+        ])->findOrFail($id);
+
+        return response()->json([
+            'success' => true,
+            'data' => $subscription,
+        ]);
+    }
+
+    public function update(SubscriptionRequest $request, string $id): JsonResponse
+    {
+        $subscription = Subscription::findOrFail($id);
+        $oldStatus = $subscription->status;
+        $data = $request->validated();
+
+        $subscription->update($data);
+
+        // Handle status change for MikroTik
+        $newStatus = $data['status'] ?? $oldStatus;
+
+        if ($oldStatus !== $newStatus) {
+            try {
+                $package = $subscription->package;
+
+                if ($newStatus === 'suspended') {
+                    // Disable MikroTik user
+                    if ($package->type === 'pppoe') {
+                        $this->mikrotik->disablePPPoESecret($subscription->mikrotik_username);
+                    } else {
+                        $this->mikrotik->disableHotspotUser($subscription->mikrotik_username);
+                    }
+                } elseif ($newStatus === 'active' && $oldStatus === 'suspended') {
+                    // Enable MikroTik user
+                    if ($package->type === 'pppoe') {
+                        $this->mikrotik->enablePPPoESecret($subscription->mikrotik_username);
+                    } else {
+                        $this->mikrotik->enableHotspotUser($subscription->mikrotik_username);
+                    }
+                }
+            } catch (\Exception $e) {
+                \Log::warning('MikroTik status sync failed: ' . $e->getMessage());
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => $subscription->load(['customer', 'package']),
+            'message' => 'Subscription berhasil diupdate',
+        ]);
+    }
+
+    public function destroy(string $id): JsonResponse
+    {
+        $subscription = Subscription::findOrFail($id);
+
+        // Remove MikroTik user
+        try {
+            $package = $subscription->package;
+
+            if ($package->type === 'pppoe') {
+                $this->mikrotik->deletePPPoESecret($subscription->mikrotik_username);
+            } else {
+                $this->mikrotik->deleteHotspotUser($subscription->mikrotik_username);
+            }
+
+            // Remove queue
+            $this->mikrotik->deleteQueue($subscription->mikrotik_username);
+        } catch (\Exception $e) {
+            \Log::warning('MikroTik delete failed: ' . $e->getMessage());
+        }
+
+        $subscription->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Subscription berhasil dihapus',
+        ]);
+    }
+}
+```
+
+#### InvoiceController
+```php
+// app/Http/Controllers/Api/InvoiceController.php
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Http\Requests\InvoiceRequest;
+use App\Models\Invoice;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+
+class InvoiceController extends Controller
+{
+    public function index(Request $request): JsonResponse
+    {
+        $query = Invoice::with(['subscription.customer', 'subscription.package', 'payments']);
+
+        // Update overdue status
+        Invoice::where('status', 'unpaid')
+            ->where('due_date', '<', now())
+            ->update(['status' => 'overdue']);
+
+        // Filter by status
+        if ($status = $request->get('status')) {
+            $query->where('status', $status);
+        }
+
+        // Filter by subscription
+        if ($subscriptionId = $request->get('subscription_id')) {
+            $query->where('subscription_id', $subscriptionId);
+        }
+
+        // Filter by date range
+        if ($from = $request->get('from_date')) {
+            $query->where('due_date', '>=', $from);
+        }
+        if ($to = $request->get('to_date')) {
+            $query->where('due_date', '<=', $to);
+        }
+
+        // Sort
+        $sortBy = $request->get('sort_by', 'due_date');
+        $sortDir = $request->get('sort_dir', 'desc');
+        $query->orderBy($sortBy, $sortDir);
+
+        // Paginate
+        $perPage = $request->get('per_page', 15);
+        $invoices = $query->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'data' => $invoices->items(),
+            'pagination' => [
+                'current_page' => $invoices->currentPage(),
+                'last_page' => $invoices->lastPage(),
+                'per_page' => $invoices->perPage(),
+                'total' => $invoices->total(),
+            ],
+        ]);
+    }
+
+    public function store(InvoiceRequest $request): JsonResponse
+    {
+        $invoice = Invoice::create($request->validated());
+
+        return response()->json([
+            'success' => true,
+            'data' => $invoice->load(['subscription.customer', 'subscription.package']),
+            'message' => 'Invoice berhasil dibuat',
+        ], 201);
+    }
+
+    public function show(string $id): JsonResponse
+    {
+        $invoice = Invoice::with([
+            'subscription.customer',
+            'subscription.package',
+            'payments',
+        ])->findOrFail($id);
+
+        return response()->json([
+            'success' => true,
+            'data' => $invoice,
+        ]);
+    }
+
+    public function update(InvoiceRequest $request, string $id): JsonResponse
+    {
+        $invoice = Invoice::findOrFail($id);
+        $invoice->update($request->validated());
+
+        return response()->json([
+            'success' => true,
+            'data' => $invoice->load(['subscription.customer']),
+            'message' => 'Invoice berhasil diupdate',
+        ]);
+    }
+
+    public function destroy(string $id): JsonResponse
+    {
+        $invoice = Invoice::findOrFail($id);
+
+        if ($invoice->status === 'paid') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Tidak dapat menghapus invoice yang sudah dibayar',
+            ], 422);
+        }
+
+        $invoice->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Invoice berhasil dihapus',
+        ]);
+    }
+
+    public function markPaid(string $id): JsonResponse
+    {
+        $invoice = Invoice::findOrFail($id);
+        $invoice->update(['status' => 'paid']);
+
+        return response()->json([
+            'success' => true,
+            'data' => $invoice,
+            'message' => 'Invoice ditandai sebagai lunas',
+        ]);
+    }
+
+    // Public endpoint for customer payment portal
+    public function publicShow(string $id): JsonResponse
+    {
+        $invoice = Invoice::with([
+            'subscription.customer:id,name,email,phone',
+            'subscription.package:id,name,price,bandwidth',
+        ])->findOrFail($id);
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'id' => $invoice->id,
+                'amount' => $invoice->amount,
+                'due_date' => $invoice->due_date,
+                'status' => $invoice->status,
+                'customer_name' => $invoice->subscription->customer->name,
+                'customer_email' => $invoice->subscription->customer->email,
+                'package_name' => $invoice->subscription->package->name,
+                'package_bandwidth' => $invoice->subscription->package->bandwidth,
+            ],
+        ]);
+    }
+}
+```
+
+#### PaymentController
+```php
+// app/Http/Controllers/Api/PaymentController.php
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Http\Requests\PaymentRequest;
+use App\Models\Invoice;
+use App\Models\Payment;
+use App\Models\Subscription;
+use App\Services\MikrotikService;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Midtrans\Config;
+use Midtrans\Snap;
+use Midtrans\Notification;
+
+class PaymentController extends Controller
+{
+    protected MikrotikService $mikrotik;
+
+    public function __construct(MikrotikService $mikrotik)
+    {
+        $this->mikrotik = $mikrotik;
+
+        // Configure Midtrans
+        Config::$serverKey = config('services.midtrans.server_key');
+        Config::$isProduction = config('services.midtrans.is_production', false);
+        Config::$isSanitized = true;
+        Config::$is3ds = true;
+    }
+
+    public function index(Request $request): JsonResponse
+    {
+        $query = Payment::with(['invoice.subscription.customer']);
+
+        // Filter by invoice
+        if ($invoiceId = $request->get('invoice_id')) {
+            $query->where('invoice_id', $invoiceId);
+        }
+
+        // Filter by method
+        if ($method = $request->get('method')) {
+            $query->where('method', $method);
+        }
+
+        // Filter by date range
+        if ($from = $request->get('from_date')) {
+            $query->where('payment_date', '>=', $from);
+        }
+        if ($to = $request->get('to_date')) {
+            $query->where('payment_date', '<=', $to);
+        }
+
+        // Sort
+        $sortBy = $request->get('sort_by', 'payment_date');
+        $sortDir = $request->get('sort_dir', 'desc');
+        $query->orderBy($sortBy, $sortDir);
+
+        // Paginate
+        $perPage = $request->get('per_page', 15);
+        $payments = $query->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'data' => $payments->items(),
+            'pagination' => [
+                'current_page' => $payments->currentPage(),
+                'last_page' => $payments->lastPage(),
+                'per_page' => $payments->perPage(),
+                'total' => $payments->total(),
+            ],
+        ]);
+    }
+
+    public function store(PaymentRequest $request): JsonResponse
+    {
+        $data = $request->validated();
+        $data['payment_date'] = $data['payment_date'] ?? now();
+
+        $payment = Payment::create($data);
+
+        // Update invoice status
+        $invoice = Invoice::findOrFail($data['invoice_id']);
+        $invoice->update(['status' => 'paid']);
+
+        // Re-enable subscription if suspended
+        $subscription = $invoice->subscription;
+        if ($subscription->status === 'suspended') {
+            $subscription->update(['status' => 'active']);
+
+            // Enable MikroTik user
+            try {
+                $package = $subscription->package;
+                if ($package->type === 'pppoe') {
+                    $this->mikrotik->enablePPPoESecret($subscription->mikrotik_username);
+                } else {
+                    $this->mikrotik->enableHotspotUser($subscription->mikrotik_username);
+                }
+            } catch (\Exception $e) {
+                \Log::warning('MikroTik enable failed: ' . $e->getMessage());
+            }
+        }
+
+        // Generate next invoice if auto_renew
+        if ($subscription->auto_renew) {
+            // Extend subscription
+            $newEndDate = $subscription->end_date->addMonth();
+            $subscription->update(['end_date' => $newEndDate]);
+
+            // Create next invoice
+            Invoice::create([
+                'subscription_id' => $subscription->id,
+                'amount' => $subscription->package->price,
+                'due_date' => $newEndDate->subDays(7),
+                'status' => 'unpaid',
+            ]);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => $payment->load('invoice'),
+            'message' => 'Pembayaran berhasil dicatat',
+        ], 201);
+    }
+
+    public function show(string $id): JsonResponse
+    {
+        $payment = Payment::with([
+            'invoice.subscription.customer',
+            'invoice.subscription.package',
+        ])->findOrFail($id);
+
+        return response()->json([
+            'success' => true,
+            'data' => $payment,
+        ]);
+    }
+
+    // Create Midtrans Snap token
+    public function createSnapToken(Request $request): JsonResponse
+    {
+        $request->validate([
+            'invoice_id' => 'required|exists:invoices,id',
+        ]);
+
+        $invoice = Invoice::with(['subscription.customer', 'subscription.package'])
+            ->findOrFail($request->invoice_id);
+
+        $params = [
+            'transaction_details' => [
+                'order_id' => 'INV-' . $invoice->id . '-' . time(),
+                'gross_amount' => (int) $invoice->amount,
+            ],
+            'customer_details' => [
+                'first_name' => $invoice->subscription->customer->name,
+                'email' => $invoice->subscription->customer->email ?? 'customer@example.com',
+                'phone' => $invoice->subscription->customer->phone ?? '',
+            ],
+            'item_details' => [
+                [
+                    'id' => $invoice->subscription->package->id,
+                    'price' => (int) $invoice->amount,
+                    'quantity' => 1,
+                    'name' => $invoice->subscription->package->name . ' - ' .
+                              $invoice->subscription->package->bandwidth,
+                ],
+            ],
+        ];
+
+        try {
+            $snapToken = Snap::getSnapToken($params);
+
+            // Save snap token reference
+            $invoice->update([
+                'payment_reference' => $params['transaction_details']['order_id'],
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'snap_token' => $snapToken,
+                    'order_id' => $params['transaction_details']['order_id'],
+                ],
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal membuat token pembayaran: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    // Handle Midtrans webhook
+    public function handleWebhook(Request $request): JsonResponse
+    {
+        try {
+            $notification = new Notification();
+
+            $transactionStatus = $notification->transaction_status;
+            $orderId = $notification->order_id;
+            $fraudStatus = $notification->fraud_status;
+
+            // Extract invoice ID from order_id (format: INV-{uuid}-{timestamp})
+            $parts = explode('-', $orderId);
+            if (count($parts) < 2) {
+                return response()->json(['message' => 'Invalid order ID'], 400);
+            }
+
+            // Reconstruct UUID (parts 1-5)
+            $invoiceId = implode('-', array_slice($parts, 1, 5));
+
+            $invoice = Invoice::find($invoiceId);
+            if (!$invoice) {
+                return response()->json(['message' => 'Invoice not found'], 404);
+            }
+
+            // Handle transaction status
+            if ($transactionStatus == 'capture' || $transactionStatus == 'settlement') {
+                if ($fraudStatus == 'accept' || $transactionStatus == 'settlement') {
+                    // Payment success
+                    Payment::create([
+                        'invoice_id' => $invoice->id,
+                        'amount' => $invoice->amount,
+                        'method' => 'midtrans',
+                        'payment_date' => now(),
+                        'transaction_id' => $notification->transaction_id,
+                    ]);
+
+                    $invoice->update(['status' => 'paid']);
+
+                    // Re-enable subscription if suspended
+                    $subscription = $invoice->subscription;
+                    if ($subscription->status === 'suspended') {
+                        $subscription->update(['status' => 'active']);
+
+                        try {
+                            $package = $subscription->package;
+                            if ($package->type === 'pppoe') {
+                                $this->mikrotik->enablePPPoESecret($subscription->mikrotik_username);
+                            } else {
+                                $this->mikrotik->enableHotspotUser($subscription->mikrotik_username);
+                            }
+                        } catch (\Exception $e) {
+                            \Log::warning('MikroTik webhook enable failed: ' . $e->getMessage());
+                        }
+                    }
+
+                    // Generate next invoice if auto_renew
+                    if ($subscription->auto_renew) {
+                        $newEndDate = $subscription->end_date->addMonth();
+                        $subscription->update(['end_date' => $newEndDate]);
+
+                        Invoice::create([
+                            'subscription_id' => $subscription->id,
+                            'amount' => $subscription->package->price,
+                            'due_date' => $newEndDate->subDays(7),
+                            'status' => 'unpaid',
+                        ]);
+                    }
+                }
+            } elseif ($transactionStatus == 'pending') {
+                // Payment pending - do nothing
+            } elseif (in_array($transactionStatus, ['deny', 'expire', 'cancel'])) {
+                // Payment failed
+                $invoice->update(['status' => 'unpaid']);
+            }
+
+            return response()->json(['message' => 'Webhook processed']);
+        } catch (\Exception $e) {
+            \Log::error('Midtrans webhook error: ' . $e->getMessage());
+            return response()->json(['message' => 'Webhook error'], 500);
+        }
+    }
+}
+```
+
+---
+
 ### Step 12: Define API Routes
 
 ```php
@@ -431,6 +1704,8 @@ use App\Http\Controllers\Api\PackageController;
 use App\Http\Controllers\Api\SubscriptionController;
 use App\Http\Controllers\Api\InvoiceController;
 use App\Http\Controllers\Api\PaymentController;
+use App\Http\Controllers\Api\RouterSettingsController;
+use App\Http\Controllers\Api\AuthController;
 
 // Health check
 Route::get('/health', function () {
@@ -441,25 +1716,57 @@ Route::get('/health', function () {
     ]);
 });
 
-// MikroTik routes
-Route::prefix('mikrotik')->group(function () {
-    Route::get('/test', [MikrotikController::class, 'testConnection']);
-    Route::get('/resources', [MikrotikController::class, 'getSystemResources']);
-    Route::get('/online-users', [MikrotikController::class, 'getOnlineUsers']);
-    Route::get('/traffic', [MikrotikController::class, 'getTraffic']);
-    Route::post('/pppoe/create', [MikrotikController::class, 'createPPPoE']);
-    Route::post('/pppoe/disable', [MikrotikController::class, 'disablePPPoE']);
-    Route::post('/pppoe/enable', [MikrotikController::class, 'enablePPPoE']);
+// Auth routes
+Route::prefix('auth')->group(function () {
+    Route::post('/login', [AuthController::class, 'login']);
+    Route::post('/register', [AuthController::class, 'register']);
+    Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth:sanctum');
+    Route::get('/user', [AuthController::class, 'user'])->middleware('auth:sanctum');
 });
 
-// CRUD routes
-Route::apiResource('customers', CustomerController::class);
-Route::apiResource('packages', PackageController::class);
-Route::apiResource('subscriptions', SubscriptionController::class);
-Route::apiResource('invoices', InvoiceController::class);
-Route::apiResource('payments', PaymentController::class);
+// Protected routes
+Route::middleware('auth:sanctum')->group(function () {
+    // CRUD Resources
+    Route::apiResource('customers', CustomerController::class);
+    Route::apiResource('packages', PackageController::class);
+    Route::apiResource('subscriptions', SubscriptionController::class);
+    Route::apiResource('invoices', InvoiceController::class);
+    Route::apiResource('payments', PaymentController::class);
 
-// Midtrans webhook
+    // Invoice additional routes
+    Route::post('/invoices/{id}/mark-paid', [InvoiceController::class, 'markPaid']);
+
+    // Router Settings
+    Route::get('/router-settings', [RouterSettingsController::class, 'index']);
+    Route::post('/router-settings', [RouterSettingsController::class, 'store']);
+    Route::get('/router-settings/test', [RouterSettingsController::class, 'testConnection']);
+
+    // MikroTik operations
+    Route::prefix('mikrotik')->group(function () {
+        Route::get('/system', [MikrotikController::class, 'getSystem']);
+        Route::get('/traffic', [MikrotikController::class, 'getTraffic']);
+        Route::get('/interfaces', [MikrotikController::class, 'getInterfaces']);
+        Route::get('/online-users', [MikrotikController::class, 'getOnlineUsers']);
+        Route::get('/user-detail', [MikrotikController::class, 'getUserDetail']);
+        Route::post('/create-user', [MikrotikController::class, 'createUser']);
+        Route::put('/update-user', [MikrotikController::class, 'updateUser']);
+        Route::delete('/delete-user', [MikrotikController::class, 'deleteUser']);
+        Route::post('/toggle-user', [MikrotikController::class, 'toggleUser']);
+        Route::post('/disconnect-user', [MikrotikController::class, 'disconnectUser']);
+        Route::post('/sync-secret', [MikrotikController::class, 'syncSecret']);
+        Route::post('/import-secrets', [MikrotikController::class, 'importSecrets']);
+        Route::post('/sync-package', [MikrotikController::class, 'syncPackage']);
+        Route::get('/profiles', [MikrotikController::class, 'getProfiles']);
+        Route::post('/profiles', [MikrotikController::class, 'createProfile']);
+        Route::put('/profiles/{name}', [MikrotikController::class, 'updateProfile']);
+        Route::delete('/profiles/{name}', [MikrotikController::class, 'deleteProfile']);
+    });
+});
+
+// Public routes (for customer payment portal)
+Route::get('/invoices/{id}/public', [InvoiceController::class, 'publicShow']);
+
+// Midtrans webhook (no auth, verified by signature)
 Route::post('/midtrans/webhook', [PaymentController::class, 'handleWebhook']);
 Route::post('/midtrans/snap-token', [PaymentController::class, 'createSnapToken']);
 ```
