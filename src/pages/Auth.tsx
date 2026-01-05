@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,13 +8,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Wifi, Loader2, Shield, Zap, Users } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
+import { api } from "@/lib/api";
 
 export default function Auth() {
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordConfirmation, setPasswordConfirmation] = useState("");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
 
   useEffect(() => {
     if (user) {
@@ -27,16 +29,14 @@ export default function Auth() {
     e.preventDefault();
     setLoading(true);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    const response = await api.login(email, password);
 
-    if (error) {
-      toast.error(error.message);
-    } else {
+    if (response.success) {
       toast.success("Welcome back!");
+      await refreshUser();
       navigate("/dashboard");
+    } else {
+      toast.error(response.error || "Invalid credentials");
     }
 
     setLoading(false);
@@ -44,20 +44,27 @@ export default function Auth() {
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (password !== passwordConfirmation) {
+      toast.error("Passwords do not match");
+      return;
+    }
+
+    if (password.length < 8) {
+      toast.error("Password must be at least 8 characters");
+      return;
+    }
+
     setLoading(true);
 
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: `${window.location.origin}/dashboard`,
-      },
-    });
+    const response = await api.register(name, email, password, passwordConfirmation);
 
-    if (error) {
-      toast.error(error.message);
+    if (response.success) {
+      toast.success("Account created successfully!");
+      await refreshUser();
+      navigate("/dashboard");
     } else {
-      toast.success("Account created! Please check your email to verify.");
+      toast.error(response.error || "Registration failed");
     }
 
     setLoading(false);
@@ -205,6 +212,20 @@ export default function Auth() {
                   </div>
                   <form onSubmit={handleSignUp} className="space-y-4">
                     <div className="space-y-2">
+                      <Label htmlFor="name-signup" className="text-sm font-medium">
+                        Full Name
+                      </Label>
+                      <Input
+                        id="name-signup"
+                        type="text"
+                        placeholder="John Doe"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        required
+                        className="h-12"
+                      />
+                    </div>
+                    <div className="space-y-2">
                       <Label htmlFor="email-signup" className="text-sm font-medium">
                         Email
                       </Label>
@@ -229,7 +250,22 @@ export default function Auth() {
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         required
-                        minLength={6}
+                        minLength={8}
+                        className="h-12"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="password-confirm-signup" className="text-sm font-medium">
+                        Confirm Password
+                      </Label>
+                      <Input
+                        id="password-confirm-signup"
+                        type="password"
+                        placeholder="••••••••"
+                        value={passwordConfirmation}
+                        onChange={(e) => setPasswordConfirmation(e.target.value)}
+                        required
+                        minLength={8}
                         className="h-12"
                       />
                     </div>
