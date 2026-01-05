@@ -56,9 +56,17 @@ interface ApiResponse<T = unknown> {
 
 class ApiClient {
   private token: string | null = null;
+  private static instance: ApiClient;
 
   constructor() {
     this.token = localStorage.getItem('auth_token');
+  }
+
+  static getInstance(): ApiClient {
+    if (!ApiClient.instance) {
+      ApiClient.instance = new ApiClient();
+    }
+    return ApiClient.instance;
   }
 
   private getHeaders(): HeadersInit {
@@ -527,5 +535,5 @@ class ApiClient {
   }
 }
 
-export const api = new ApiClient();
+export const api = ApiClient.getInstance();
 export default api;
