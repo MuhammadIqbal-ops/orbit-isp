@@ -270,6 +270,11 @@ class ApiClient {
     return this.request(`/invoices/${id}`, { method: 'DELETE' });
   }
 
+  // Public invoice endpoint (no auth required)
+  async getPublicInvoice(id: string) {
+    return this.request(`/public/invoices/${id}`);
+  }
+
   // ==================== PAYMENTS ====================
   async getPayments() {
     return this.request('/payments');

@@ -15,6 +15,7 @@ import Invoices from "./pages/Invoices";
 import Payments from "./pages/Payments";
 import Monitoring from "./pages/Monitoring";
 import Settings from "./pages/Settings";
+import PaymentPortal from "./pages/PaymentPortal";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -29,6 +30,7 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/auth" element={<Auth />} />
+            <Route path="/pay/:invoiceId" element={<PaymentPortal />} />
             <Route
               path="/dashboard"
               element={
