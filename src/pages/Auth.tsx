@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Wifi, Loader2, Shield, Zap, Users } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
-import { api } from "@/lib/api";
+import { supabase } from "@/integrations/supabase/client";
 
 export default function Auth() {
   const [name, setName] = useState("");
@@ -17,7 +17,7 @@ export default function Auth() {
   const [passwordConfirmation, setPasswordConfirmation] = useState("");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  const { user, refreshUser } = useAuth();
+  const { user } = useAuth();
 
   useEffect(() => {
     if (user) {
@@ -29,14 +29,16 @@ export default function Auth() {
     e.preventDefault();
     setLoading(true);
 
-    const response = await api.login(email, password);
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
-    if (response.success) {
-      toast.success("Welcome back!");
-      await refreshUser();
-      navigate("/dashboard");
+    if (error) {
+      toast.error(error.message);
     } else {
-      toast.error(response.error || "Invalid credentials");
+      toast.success("Welcome back!");
+      navigate("/dashboard");
     }
 
     setLoading(false);
@@ -57,14 +59,22 @@ export default function Auth() {
 
     setLoading(true);
 
-    const response = await api.register(name, email, password, passwordConfirmation);
+    const redirectUrl = `${window.location.origin}/`;
 
-    if (response.success) {
-      toast.success("Account created successfully!");
-      await refreshUser();
-      navigate("/dashboard");
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: redirectUrl,
+        data: { name },
+      },
+    });
+
+    if (error) {
+      toast.error(error.message);
     } else {
-      toast.error(response.error || "Registration failed");
+      toast.success("Account created successfully!");
+      navigate("/dashboard");
     }
 
     setLoading(false);

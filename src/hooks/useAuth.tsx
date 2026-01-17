@@ -1,8 +1,9 @@
-import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
+import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "@/lib/api";
+import { supabase } from "@/integrations/supabase/client";
+import { User, Session } from "@supabase/supabase-js";
 
-interface User {
+interface AuthUser {
   id: string;
   name: string;
   email: string;
@@ -11,7 +12,8 @@ interface User {
 }
 
 interface AuthContextType {
-  user: User | null;
+  user: AuthUser | null;
+  session: Session | null;
   isAdmin: boolean;
   loading: boolean;
   signOut: () => Promise<void>;
@@ -21,54 +23,82 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
-  const fetchUser = useCallback(async () => {
-    const token = localStorage.getItem('auth_token');
-    
-    if (!token) {
+  const fetchUserRole = async (userId: string): Promise<string | null> => {
+    const { data } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', userId)
+      .single();
+    return data?.role || null;
+  };
+
+  const updateUserState = async (supabaseUser: User | null) => {
+    if (!supabaseUser) {
       setUser(null);
       setIsAdmin(false);
-      setLoading(false);
       return;
     }
 
-    const response = await api.getUser();
-    
-    if (response.success && response.data) {
-      const userData = (response.data as any).user || response.data;
-      setUser(userData);
-      setIsAdmin(userData.role === 'admin');
-    } else {
-      // Token invalid, clear it
-      localStorage.removeItem('auth_token');
-      setUser(null);
-      setIsAdmin(false);
-    }
-    
-    setLoading(false);
-  }, []);
+    // Defer the role fetch to avoid deadlock
+    setTimeout(async () => {
+      const role = await fetchUserRole(supabaseUser.id);
+      
+      const authUser: AuthUser = {
+        id: supabaseUser.id,
+        email: supabaseUser.email || '',
+        name: supabaseUser.user_metadata?.name || supabaseUser.email?.split('@')[0] || '',
+        role: role || 'user',
+        created_at: supabaseUser.created_at,
+      };
+
+      setUser(authUser);
+      setIsAdmin(role === 'admin');
+    }, 0);
+  };
 
   useEffect(() => {
-    fetchUser();
-  }, [fetchUser]);
+    // Set up auth state listener FIRST
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, newSession) => {
+        setSession(newSession);
+        updateUserState(newSession?.user ?? null);
+        setLoading(false);
+      }
+    );
+
+    // THEN check for existing session
+    supabase.auth.getSession().then(({ data: { session: existingSession } }) => {
+      setSession(existingSession);
+      updateUserState(existingSession?.user ?? null);
+      setLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   const signOut = async () => {
-    await api.logout();
+    await supabase.auth.signOut();
     setUser(null);
+    setSession(null);
     setIsAdmin(false);
     navigate("/auth");
   };
 
   const refreshUser = async () => {
-    await fetchUser();
+    const { data: { session: currentSession } } = await supabase.auth.getSession();
+    if (currentSession?.user) {
+      await updateUserState(currentSession.user);
+    }
   };
 
   return (
-    <AuthContext.Provider value={{ user, isAdmin, loading, signOut, refreshUser }}>
+    <AuthContext.Provider value={{ user, session, isAdmin, loading, signOut, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

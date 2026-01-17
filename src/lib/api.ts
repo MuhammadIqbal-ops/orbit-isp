@@ -1,14 +1,18 @@
 /**
- * Laravel API Client
+ * Supabase API Client
  * 
- * This file handles all communication with the Laravel backend.
- * Replace VITE_API_URL in .env with your Laravel API URL.
+ * This file handles all communication with Supabase backend.
+ * Uses Supabase client for database operations and Edge Functions for complex operations.
  */
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+import { supabase } from "@/integrations/supabase/client";
 
-// Debug: Log API URL on initialization
-console.log('🔗 API URL:', API_URL);
+interface ApiResponse<T = unknown> {
+  success: boolean;
+  data?: T;
+  message?: string;
+  error?: string;
+}
 
 // Connection test function
 export async function testApiConnection(): Promise<{
@@ -19,48 +23,34 @@ export async function testApiConnection(): Promise<{
 }> {
   const startTime = Date.now();
   try {
-    const response = await fetch(`${API_URL}/health`, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' },
-    });
+    const { data, error } = await supabase.from('customers').select('id').limit(1);
     const latency = Date.now() - startTime;
     
-    if (response.ok) {
+    if (error) {
       return {
-        connected: true,
-        url: API_URL,
-        message: `Connected to Laravel backend (${latency}ms)`,
-        latency,
+        connected: false,
+        url: 'Supabase',
+        message: error.message,
       };
     }
+    
     return {
-      connected: false,
-      url: API_URL,
-      message: `Server responded with status ${response.status}`,
+      connected: true,
+      url: 'Supabase',
+      message: `Connected to backend (${latency}ms)`,
+      latency,
     };
   } catch (error: any) {
     return {
       connected: false,
-      url: API_URL,
+      url: 'Supabase',
       message: error.message || 'Failed to connect to backend',
     };
   }
 }
 
-interface ApiResponse<T = unknown> {
-  success: boolean;
-  data?: T;
-  message?: string;
-  error?: string;
-}
-
 class ApiClient {
-  private token: string | null = null;
   private static instance: ApiClient;
-
-  constructor() {
-    this.token = localStorage.getItem('auth_token');
-  }
 
   static getInstance(): ApiClient {
     if (!ApiClient.instance) {
@@ -69,462 +59,566 @@ class ApiClient {
     return ApiClient.instance;
   }
 
-  private getHeaders(): HeadersInit {
-    const headers: HeadersInit = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    };
-
-    if (this.token) {
-      headers['Authorization'] = `Bearer ${this.token}`;
+  // Helper to wrap Supabase responses
+  private wrapResponse<T>(data: T | null, error: any): ApiResponse<T> {
+    if (error) {
+      console.error('Supabase Error:', error);
+      return { success: false, error: error.message };
     }
-
-    return headers;
+    return { success: true, data: data as T };
   }
 
-  private async request<T>(
-    endpoint: string,
-    options: RequestInit = {}
-  ): Promise<ApiResponse<T>> {
+  // Helper to call edge functions
+  private async callEdgeFunction<T>(functionName: string, body?: any): Promise<ApiResponse<T>> {
     try {
-      const response = await fetch(`${API_URL}${endpoint}`, {
-        ...options,
-        headers: {
-          ...this.getHeaders(),
-          ...options.headers,
-        },
+      const { data, error } = await supabase.functions.invoke(functionName, {
+        body: body || {},
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || data.error || 'Request failed');
+      if (error) {
+        return { success: false, error: error.message };
       }
 
       return { success: true, data };
     } catch (error: any) {
-      console.error(`API Error [${endpoint}]:`, error);
-      return {
-        success: false,
-        error: error.message || 'An error occurred',
-      };
-    }
-  }
-
-  setToken(token: string | null) {
-    this.token = token;
-    if (token) {
-      localStorage.setItem('auth_token', token);
-    } else {
-      localStorage.removeItem('auth_token');
+      console.error(`Edge Function Error [${functionName}]:`, error);
+      return { success: false, error: error.message };
     }
   }
 
   // ==================== AUTH ====================
   async login(email: string, password: string) {
-    const response = await this.request<{ user: any; token: string }>('/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
     });
 
-    if (response.success && response.data?.token) {
-      this.setToken(response.data.token);
+    if (error) {
+      return { success: false, error: error.message };
     }
 
-    return response;
+    return { success: true, data: { user: data.user, session: data.session } };
   }
 
-  async register(name: string, email: string, password: string, password_confirmation: string) {
-    const response = await this.request<{ user: any; token: string }>('/auth/register', {
-      method: 'POST',
-      body: JSON.stringify({ name, email, password, password_confirmation }),
+  async register(name: string, email: string, password: string, _password_confirmation: string) {
+    const redirectUrl = `${window.location.origin}/`;
+    
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: redirectUrl,
+        data: { name },
+      },
     });
 
-    if (response.success && response.data?.token) {
-      this.setToken(response.data.token);
+    if (error) {
+      return { success: false, error: error.message };
     }
 
-    return response;
+    return { success: true, data: { user: data.user, session: data.session } };
   }
 
   async logout() {
-    const response = await this.request('/auth/logout', { method: 'POST' });
-    this.setToken(null);
-    return response;
+    const { error } = await supabase.auth.signOut();
+    return this.wrapResponse(null, error);
   }
 
   async getUser() {
-    return this.request<{ user: any }>('/auth/user');
+    const { data: { user }, error } = await supabase.auth.getUser();
+    
+    if (error || !user) {
+      return { success: false, error: error?.message || 'Not authenticated' };
+    }
+
+    // Check if user is admin
+    const { data: roleData } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id)
+      .single();
+
+    return {
+      success: true,
+      data: {
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.user_metadata?.name || user.email?.split('@')[0],
+          role: roleData?.role || 'user',
+          created_at: user.created_at,
+        },
+      },
+    };
   }
 
   // ==================== DASHBOARD ====================
   async getDashboardStats() {
-    return this.request('/dashboard/stats');
+    const [customers, packages, subscriptions, invoices] = await Promise.all([
+      supabase.from('customers').select('id, status', { count: 'exact' }),
+      supabase.from('packages').select('id', { count: 'exact' }),
+      supabase.from('subscriptions').select('id, status', { count: 'exact' }),
+      supabase.from('invoices').select('id, amount, status', { count: 'exact' }),
+    ]);
+
+    const activeSubscriptions = subscriptions.data?.filter(s => s.status === 'active').length || 0;
+    const unpaidInvoices = invoices.data?.filter(i => i.status === 'unpaid') || [];
+    const totalRevenue = invoices.data?.filter(i => i.status === 'paid').reduce((sum, i) => sum + Number(i.amount), 0) || 0;
+
+    return {
+      success: true,
+      data: {
+        total_customers: customers.count || 0,
+        active_customers: customers.data?.filter(c => c.status === 'active').length || 0,
+        total_packages: packages.count || 0,
+        active_subscriptions: activeSubscriptions,
+        pending_invoices: unpaidInvoices.length,
+        total_revenue: totalRevenue,
+      },
+    };
   }
 
   // ==================== CUSTOMERS ====================
   async getCustomers() {
-    return this.request('/customers');
+    const { data, error } = await supabase
+      .from('customers')
+      .select('*')
+      .order('created_at', { ascending: false });
+    return this.wrapResponse(data, error);
   }
 
   async getCustomer(id: string) {
-    return this.request(`/customers/${id}`);
+    const { data, error } = await supabase
+      .from('customers')
+      .select('*')
+      .eq('id', id)
+      .single();
+    return this.wrapResponse(data, error);
   }
 
-  async createCustomer(data: any) {
-    return this.request('/customers', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
+  async createCustomer(customerData: any) {
+    const { data, error } = await supabase
+      .from('customers')
+      .insert(customerData)
+      .select()
+      .single();
+    return this.wrapResponse(data, error);
   }
 
-  async updateCustomer(id: string, data: any) {
-    return this.request(`/customers/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
+  async updateCustomer(id: string, customerData: any) {
+    const { data, error } = await supabase
+      .from('customers')
+      .update(customerData)
+      .eq('id', id)
+      .select()
+      .single();
+    return this.wrapResponse(data, error);
   }
 
   async deleteCustomer(id: string) {
-    return this.request(`/customers/${id}`, { method: 'DELETE' });
+    const { error } = await supabase
+      .from('customers')
+      .delete()
+      .eq('id', id);
+    return this.wrapResponse(null, error);
   }
 
   // ==================== PACKAGES ====================
   async getPackages() {
-    return this.request('/packages');
+    const { data, error } = await supabase
+      .from('packages')
+      .select('*')
+      .order('price', { ascending: true });
+    return this.wrapResponse(data, error);
   }
 
   async getPackage(id: string) {
-    return this.request(`/packages/${id}`);
+    const { data, error } = await supabase
+      .from('packages')
+      .select('*')
+      .eq('id', id)
+      .single();
+    return this.wrapResponse(data, error);
   }
 
-  async createPackage(data: any) {
-    return this.request('/packages', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
+  async createPackage(packageData: any) {
+    const { data, error } = await supabase
+      .from('packages')
+      .insert(packageData)
+      .select()
+      .single();
+    return this.wrapResponse(data, error);
   }
 
-  async updatePackage(id: string, data: any) {
-    return this.request(`/packages/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
+  async updatePackage(id: string, packageData: any) {
+    const { data, error } = await supabase
+      .from('packages')
+      .update(packageData)
+      .eq('id', id)
+      .select()
+      .single();
+    return this.wrapResponse(data, error);
   }
 
   async deletePackage(id: string) {
-    return this.request(`/packages/${id}`, { method: 'DELETE' });
+    const { error } = await supabase
+      .from('packages')
+      .delete()
+      .eq('id', id);
+    return this.wrapResponse(null, error);
   }
 
   // ==================== SUBSCRIPTIONS ====================
   async getSubscriptions() {
-    return this.request('/subscriptions');
+    const { data, error } = await supabase
+      .from('subscriptions')
+      .select(`
+        *,
+        customer:customers(id, name, email, phone),
+        package:packages(id, name, bandwidth, price)
+      `)
+      .order('created_at', { ascending: false });
+    return this.wrapResponse(data, error);
   }
 
   async getSubscription(id: string) {
-    return this.request(`/subscriptions/${id}`);
+    const { data, error } = await supabase
+      .from('subscriptions')
+      .select(`
+        *,
+        customer:customers(id, name, email, phone),
+        package:packages(id, name, bandwidth, price)
+      `)
+      .eq('id', id)
+      .single();
+    return this.wrapResponse(data, error);
   }
 
-  async createSubscription(data: any) {
-    return this.request('/subscriptions', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
+  async createSubscription(subscriptionData: any) {
+    const { data, error } = await supabase
+      .from('subscriptions')
+      .insert(subscriptionData)
+      .select()
+      .single();
+    return this.wrapResponse(data, error);
   }
 
-  async updateSubscription(id: string, data: any) {
-    return this.request(`/subscriptions/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
+  async updateSubscription(id: string, subscriptionData: any) {
+    const { data, error } = await supabase
+      .from('subscriptions')
+      .update(subscriptionData)
+      .eq('id', id)
+      .select()
+      .single();
+    return this.wrapResponse(data, error);
   }
 
   async deleteSubscription(id: string) {
-    return this.request(`/subscriptions/${id}`, { method: 'DELETE' });
+    const { error } = await supabase
+      .from('subscriptions')
+      .delete()
+      .eq('id', id);
+    return this.wrapResponse(null, error);
   }
 
   // ==================== INVOICES ====================
   async getInvoices() {
-    return this.request('/invoices');
+    const { data, error } = await supabase
+      .from('invoices')
+      .select(`
+        *,
+        subscription:subscriptions(
+          id,
+          mikrotik_username,
+          customer:customers(id, name, email, phone),
+          package:packages(id, name, price)
+        )
+      `)
+      .order('created_at', { ascending: false });
+    return this.wrapResponse(data, error);
   }
 
   async getInvoice(id: string) {
-    return this.request(`/invoices/${id}`);
+    const { data, error } = await supabase
+      .from('invoices')
+      .select(`
+        *,
+        subscription:subscriptions(
+          id,
+          mikrotik_username,
+          customer:customers(id, name, email, phone),
+          package:packages(id, name, price, bandwidth)
+        )
+      `)
+      .eq('id', id)
+      .single();
+    return this.wrapResponse(data, error);
   }
 
-  async createInvoice(data: any) {
-    return this.request('/invoices', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
+  async createInvoice(invoiceData: any) {
+    const { data, error } = await supabase
+      .from('invoices')
+      .insert(invoiceData)
+      .select()
+      .single();
+    return this.wrapResponse(data, error);
   }
 
-  async updateInvoice(id: string, data: any) {
-    return this.request(`/invoices/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
+  async updateInvoice(id: string, invoiceData: any) {
+    const { data, error } = await supabase
+      .from('invoices')
+      .update(invoiceData)
+      .eq('id', id)
+      .select()
+      .single();
+    return this.wrapResponse(data, error);
   }
 
   async deleteInvoice(id: string) {
-    return this.request(`/invoices/${id}`, { method: 'DELETE' });
+    const { error } = await supabase
+      .from('invoices')
+      .delete()
+      .eq('id', id);
+    return this.wrapResponse(null, error);
   }
 
-  // Public invoice endpoint (no auth required)
+  // Public invoice endpoint (no auth required) - uses edge function
   async getPublicInvoice(id: string) {
-    return this.request(`/public/invoices/${id}`);
+    return this.callEdgeFunction('public-invoice', { invoice_id: id });
   }
 
   // ==================== PAYMENTS ====================
   async getPayments() {
-    return this.request('/payments');
+    const { data, error } = await supabase
+      .from('payments')
+      .select(`
+        *,
+        invoice:invoices(
+          id,
+          amount,
+          status,
+          subscription:subscriptions(
+            customer:customers(id, name)
+          )
+        )
+      `)
+      .order('payment_date', { ascending: false });
+    return this.wrapResponse(data, error);
   }
 
   async getPayment(id: string) {
-    return this.request(`/payments/${id}`);
+    const { data, error } = await supabase
+      .from('payments')
+      .select(`
+        *,
+        invoice:invoices(*)
+      `)
+      .eq('id', id)
+      .single();
+    return this.wrapResponse(data, error);
   }
 
-  async createPayment(data: any) {
-    return this.request('/payments', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
+  async createPayment(paymentData: any) {
+    const { data, error } = await supabase
+      .from('payments')
+      .insert(paymentData)
+      .select()
+      .single();
+    
+    if (!error && data) {
+      // Update invoice status to paid
+      await supabase
+        .from('invoices')
+        .update({ status: 'paid' })
+        .eq('id', paymentData.invoice_id);
+    }
+    
+    return this.wrapResponse(data, error);
   }
 
   // ==================== ROUTER SETTINGS ====================
   async getRouterSettings() {
-    return this.request('/router-settings');
+    const { data, error } = await supabase
+      .from('router_settings')
+      .select('*')
+      .limit(1)
+      .single();
+    return this.wrapResponse(data, error);
   }
 
-  async saveRouterSettings(data: any) {
-    return this.request('/router-settings', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
+  async saveRouterSettings(settingsData: any) {
+    // Check if settings exist
+    const { data: existing } = await supabase
+      .from('router_settings')
+      .select('id')
+      .limit(1)
+      .single();
+
+    if (existing) {
+      const { data, error } = await supabase
+        .from('router_settings')
+        .update(settingsData)
+        .eq('id', existing.id)
+        .select()
+        .single();
+      return this.wrapResponse(data, error);
+    } else {
+      const { data, error } = await supabase
+        .from('router_settings')
+        .insert(settingsData)
+        .select()
+        .single();
+      return this.wrapResponse(data, error);
+    }
   }
 
   async testRouterConnection() {
-    return this.request('/router-settings/test');
+    return this.callEdgeFunction('mikrotik', { action: 'test-connection' });
   }
 
   // ==================== RADIUS SETTINGS ====================
   async getRadiusSettings() {
-    return this.request('/radius-settings');
+    const { data, error } = await supabase
+      .from('radius_settings')
+      .select('*')
+      .limit(1)
+      .single();
+    return this.wrapResponse(data, error);
   }
 
-  async saveRadiusSettings(data: any) {
-    return this.request('/radius-settings', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
+  async saveRadiusSettings(settingsData: any) {
+    const { data: existing } = await supabase
+      .from('radius_settings')
+      .select('id')
+      .limit(1)
+      .single();
+
+    if (existing) {
+      const { data, error } = await supabase
+        .from('radius_settings')
+        .update(settingsData)
+        .eq('id', existing.id)
+        .select()
+        .single();
+      return this.wrapResponse(data, error);
+    } else {
+      const { data, error } = await supabase
+        .from('radius_settings')
+        .insert(settingsData)
+        .select()
+        .single();
+      return this.wrapResponse(data, error);
+    }
   }
 
-  // ==================== MIKROTIK OPERATIONS ====================
-
-  // System & Monitoring
+  // ==================== MIKROTIK OPERATIONS (via Edge Function) ====================
   async getMikrotikSystem() {
-    return this.request('/mikrotik/system');
+    return this.callEdgeFunction('mikrotik', { action: 'get-system' });
   }
 
   async getMikrotikTraffic() {
-    return this.request('/mikrotik/traffic');
+    return this.callEdgeFunction('mikrotik', { action: 'get-traffic' });
   }
 
   async getMikrotikOnlineUsers() {
-    return this.request('/mikrotik/online-users');
+    return this.callEdgeFunction('mikrotik', { action: 'get-online-users' });
   }
 
   async getMikrotikUserDetail(username: string, type: string) {
-    return this.request(`/mikrotik/user-detail?username=${encodeURIComponent(username)}&type=${encodeURIComponent(type)}`);
+    return this.callEdgeFunction('mikrotik', { action: 'get-user-detail', username, type });
   }
 
-  // User Management
   async toggleMikrotikUser(username: string, type: string, action: 'enable' | 'disable') {
-    return this.request('/mikrotik/toggle-user', {
-      method: 'POST',
-      body: JSON.stringify({ username, type, action }),
-    });
+    return this.callEdgeFunction('mikrotik', { action: 'toggle-user', username, type, toggle: action });
   }
 
   async disconnectMikrotikUser(username: string, type: string) {
-    return this.request('/mikrotik/disconnect-user', {
-      method: 'POST',
-      body: JSON.stringify({ username, type }),
-    });
+    return this.callEdgeFunction('mikrotik', { action: 'disconnect-user', username, type });
   }
 
   async createMikrotikUser(data: any) {
-    return this.request('/mikrotik/create-user', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
+    return this.callEdgeFunction('mikrotik', { action: 'create-user', ...data });
   }
 
   async updateMikrotikUser(data: any) {
-    return this.request('/mikrotik/update-user', {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
+    return this.callEdgeFunction('mikrotik', { action: 'update-user', ...data });
   }
 
   async deleteMikrotikUser(username: string, type: string) {
-    return this.request('/mikrotik/delete-user', {
-      method: 'DELETE',
-      body: JSON.stringify({ username, type }),
-    });
+    return this.callEdgeFunction('mikrotik', { action: 'delete-user', username, type });
   }
 
-  // Secrets Management
+  // Secrets Management (stored in Supabase, synced via Edge Function)
   async getMikrotikSecrets() {
-    return this.request('/mikrotik-secrets');
+    const { data, error } = await supabase
+      .from('mikrotik_secrets')
+      .select(`
+        *,
+        customer:customers(id, name)
+      `)
+      .order('created_at', { ascending: false });
+    return this.wrapResponse(data, error);
   }
 
   async getMikrotikSecret(id: string) {
-    return this.request(`/mikrotik-secrets/${id}`);
+    const { data, error } = await supabase
+      .from('mikrotik_secrets')
+      .select('*')
+      .eq('id', id)
+      .single();
+    return this.wrapResponse(data, error);
   }
 
-  async createMikrotikSecret(data: any) {
-    return this.request('/mikrotik-secrets', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
+  async createMikrotikSecret(secretData: any) {
+    const { data, error } = await supabase
+      .from('mikrotik_secrets')
+      .insert(secretData)
+      .select()
+      .single();
+    return this.wrapResponse(data, error);
   }
 
-  async updateMikrotikSecret(id: string, data: any) {
-    return this.request(`/mikrotik-secrets/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
+  async updateMikrotikSecret(id: string, secretData: any) {
+    const { data, error } = await supabase
+      .from('mikrotik_secrets')
+      .update(secretData)
+      .eq('id', id)
+      .select()
+      .single();
+    return this.wrapResponse(data, error);
   }
 
   async deleteMikrotikSecret(id: string) {
-    return this.request(`/mikrotik-secrets/${id}`, {
-      method: 'DELETE',
-    });
+    const { error } = await supabase
+      .from('mikrotik_secrets')
+      .delete()
+      .eq('id', id);
+    return this.wrapResponse(null, error);
   }
 
   async syncMikrotikSecret(id: string, action: 'create' | 'update' | 'delete') {
-    return this.request('/mikrotik/sync-secret', {
-      method: 'POST',
-      body: JSON.stringify({ secretId: id, action }),
-    });
+    return this.callEdgeFunction('mikrotik', { action: 'sync-secret', secretId: id, syncAction: action });
   }
 
   async importMikrotikSecrets() {
-    return this.request('/mikrotik/import-secrets', {
-      method: 'POST',
-    });
+    return this.callEdgeFunction('mikrotik', { action: 'import-secrets' });
   }
 
-  // Package Sync
   async syncPackageToMikrotik(packageId: string) {
-    return this.request('/mikrotik/sync-package', {
-      method: 'POST',
-      body: JSON.stringify({ packageId }),
-    });
+    return this.callEdgeFunction('mikrotik', { action: 'sync-package', packageId });
   }
 
-  // ==================== SNMP MONITORING ====================
-  async getSnmpDevices() {
-    return this.request('/snmp-devices');
+  // ==================== BILLING LOGS ====================
+  async getBillingLogs(limit: number = 50) {
+    const { data, error } = await supabase
+      .from('billing_logs')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    return this.wrapResponse(data, error);
   }
 
-  async getSnmpDevice(id: string) {
-    return this.request(`/snmp-devices/${id}`);
-  }
-
-  async createSnmpDevice(data: any) {
-    return this.request('/snmp-devices', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  }
-
-  async updateSnmpDevice(id: string, data: any) {
-    return this.request(`/snmp-devices/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
-  }
-
-  async deleteSnmpDevice(id: string) {
-    return this.request(`/snmp-devices/${id}`, { method: 'DELETE' });
-  }
-
-  async discoverSnmpDevice(id: string) {
-    return this.request(`/snmp-devices/${id}/discover`, {
-      method: 'POST',
-    });
-  }
-
-  async getSnmpDeviceInterfaces(id: string) {
-    return this.request(`/snmp-devices/${id}/interfaces`);
-  }
-
-  async getSnmpBandwidthHistory(interfaceId: string, period: string = '24h') {
-    return this.request(`/snmp/bandwidth-history/${interfaceId}?period=${period}`);
-  }
-
-  // ==================== PING MONITORING ====================
-  async getPingTargets() {
-    return this.request('/ping-targets');
-  }
-
-  async getPingTarget(id: string) {
-    return this.request(`/ping-targets/${id}`);
-  }
-
-  async createPingTarget(data: any) {
-    return this.request('/ping-targets', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  }
-
-  async updatePingTarget(id: string, data: any) {
-    return this.request(`/ping-targets/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
-  }
-
-  async deletePingTarget(id: string) {
-    return this.request(`/ping-targets/${id}`, { method: 'DELETE' });
-  }
-
-  async getPingHistory(targetId: string, period: string = '24h') {
-    return this.request(`/ping-targets/${targetId}/history?period=${period}`);
-  }
-
-  // ==================== MONITORING DASHBOARD ====================
-  async getMonitoringDashboard() {
-    return this.request('/monitoring/dashboard');
-  }
-
-  async getAlertLogs(limit: number = 50) {
-    return this.request(`/monitoring/alerts?limit=${limit}`);
-  }
-
-  // ==================== NOTIFICATION SETTINGS ====================
-  async getNotificationSettings() {
-    return this.request('/notification-settings');
-  }
-
-  async saveNotificationSettings(data: any) {
-    return this.request('/notification-settings', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  }
-
-  async testNotification(type: 'telegram' | 'email') {
-    return this.request('/notification-settings/test', {
-      method: 'POST',
-      body: JSON.stringify({ type }),
-    });
-  }
-
-  // ==================== MIDTRANS PAYMENT ====================
+  // ==================== MIDTRANS PAYMENT (via Edge Function) ====================
   async createSnapToken(data: {
     invoice_id: string;
     amount: number;
@@ -533,9 +627,9 @@ class ApiClient {
     customer_phone?: string;
     description?: string;
   }) {
-    return this.request<{ snap_token: string; order_id: string }>('/midtrans/snap-token', {
-      method: 'POST',
-      body: JSON.stringify(data),
+    return this.callEdgeFunction<{ snap_token: string; order_id: string }>('midtrans', {
+      action: 'create-snap-token',
+      ...data,
     });
   }
 }

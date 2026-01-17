@@ -2,3 +2,12 @@ project_id = "iqljsknhuutromjjfnei"
 
 [functions.process-subscriptions]
 verify_jwt = false
+
+[functions.mikrotik]
+verify_jwt = false
+
+[functions.midtrans]
+verify_jwt = false
+
+[functions.public-invoice]
+verify_jwt = false
